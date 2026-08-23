@@ -1,0 +1,13 @@
+{
+  "appId": "com.example.javmanager",
+  "appName": "番号管理器",
+  "webDir": ".",
+  "server": {
+    "androidScheme": "https"
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 0
+    }
+  }
+}

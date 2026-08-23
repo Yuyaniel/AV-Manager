@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#0d0d0d">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>AV Manager — 女优作品管理器</title>
+  <link rel="stylesheet" href="css/style.css?v=42">
+</head>
+<body>
+  <!-- 顶部导航栏 -->
+  <header class="app-header" id="appHeader">
+    <button class="nav-btn" id="backBtn" aria-label="返回">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>
+    </button>
+    <h1 class="app-title" id="appTitle">AV Manager</h1>
+    <button class="settings-icon-wrap" id="settingsIconWrap" aria-label="设置">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+    </button>
+  </header>
+
+  <!-- 主内容区 -->
+  <main class="app-main" id="appMain">
+    <!-- 首页 -->
+    <div class="page active" id="page-home">
+      <div class="home-body">
+        <div class="home-stats" id="homeStats">
+          <div class="home-stat-card" id="homeStatActress">
+            <div class="home-stat-icon"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></div>
+            <div class="home-stat-value">0</div>
+            <div class="home-stat-label">女优</div>
+          </div>
+          <div class="home-stat-card" id="homeStatVideo">
+            <div class="home-stat-icon">🎬</div>
+            <div class="home-stat-value">0</div>
+            <div class="home-stat-label">作品</div>
+          </div>
+        </div>
+
+        <h3 class="home-section-title">快捷功能</h3>
+        <div class="home-actions">
+          <button class="home-action-card" id="homeRandomBtn">
+            <div class="home-action-icon">🎲</div>
+            <div class="home-action-text">随机抽取</div>
+          </button>
+          <button class="home-action-card" id="homeCheckinBtn">
+            <div class="home-action-icon">📅</div>
+            <div class="home-action-text">打卡</div>
+          </button>
+          <button class="home-action-card" id="homeStatsBtn">
+            <div class="home-action-icon">📊</div>
+            <div class="home-action-text">统计分析</div>
+          </button>
+          <button class="home-action-card" id="homeSitesBtn">
+            <div class="home-action-icon">🔗</div>
+            <div class="home-action-text">站点导航</div>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 女优列表页 -->
+    <div class="page" id="page-actresses">
+      <div class="search-bar" id="searchBarActress">
+        <div class="search-inner">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+          <input type="text" id="searchInputActress" placeholder="输入女优名字搜索..." autocomplete="off" enterkeyhint="search">
+          <span class="search-count" id="searchCountActress"></span>
+          <button class="search-clear" id="searchClearActress" aria-label="清除">✕</button>
+        </div>
+      </div>
+      <div class="list-toolbar">
+        <div class="toolbar-left">
+          <button class="btn-secondary btn-sm" id="batchActressBtn">批量选择</button>
+          <button class="btn-secondary btn-sm" id="importActressBtn">添加女优</button>
+          <span class="batch-info" id="batchInfoActress" style="display:none">已选 0 项</span>
+        </div>
+        <button class="view-toggle" id="viewToggleActress" aria-label="切换视图">
+          <svg class="grid-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+          <svg class="list-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+        </button>
+        <select class="sort-select" id="sortSelectActress" aria-label="排序">
+          <option value="time-desc" selected>修改时间 ↓</option>
+          <option value="works-desc">作品数 ↓</option>
+          <option value="name-desc">名称 ↓</option>
+        </select>
+      </div>
+      <div class="status-bar">
+        <span class="status-text" id="statusTextActress">加载中...</span>
+        <button class="refresh-btn" id="refreshBtnActress" aria-label="刷新">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+        </button>
+      </div>
+      <div class="actress-grid" id="actressGrid"></div>
+      <!-- 批量操作栏 -->
+      <div class="batch-bar" id="batchBarActress" style="display:none">
+        <button class="btn-secondary btn-sm" id="batchSelectAllActress">全选</button>
+        <button class="btn-delete btn-sm" id="batchDeleteActress">删除选中</button>
+        <button class="btn-secondary btn-sm" id="batchCancelActress">取消</button>
+      </div>
+    </div>
+
+    <!-- 作品列表页 -->
+    <div class="page" id="page-works">
+      <div class="search-bar" id="searchBarWork">
+        <div class="search-inner">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+          <input type="text" id="searchInputWork" placeholder="输入番号、标题、女优搜索..." autocomplete="off" enterkeyhint="search">
+          <span class="search-count" id="searchCountWork"></span>
+          <button class="search-clear" id="searchClearWork" aria-label="清除">✕</button>
+        </div>
+      </div>
+      <div class="list-toolbar">
+        <div class="toolbar-left">
+          <button class="btn-secondary btn-sm" id="batchWorkBtn">批量选择</button>
+          <button class="btn-secondary btn-sm" id="importWorkBtn">添加作品</button>
+          <span class="batch-info" id="batchInfoWork" style="display:none">已选 0 项</span>
+        </div>
+      </div>
+      <div class="status-bar">
+        <span class="status-text" id="statusTextWork">加载中...</span>
+        <button class="refresh-btn" id="refreshBtnWork" aria-label="刷新">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+        </button>
+      </div>
+      <div class="works-grid" id="worksGrid"></div>
+      <!-- 批量操作栏 -->
+      <div class="batch-bar" id="batchBarWork" style="display:none">
+        <button class="btn-secondary btn-sm" id="batchSelectAllWork">全选</button>
+        <button class="btn-delete btn-sm" id="batchDeleteWork">删除选中</button>
+        <button class="btn-secondary btn-sm" id="batchCancelWork">取消</button>
+      </div>
+    </div>
+
+    <!-- 女优详情页 -->
+    <div class="page" id="page-detail">
+      <div class="detail-header" id="detailHeader">
+        <div class="detail-avatar" id="detailAvatar">
+          <div class="avatar-placeholder-large"><svg width="48" height="48" viewBox="0 0 24 24" fill="currentColor"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg></div>
+        </div>
+        <div class="detail-info">
+          <h2 class="detail-name" id="detailName">—</h2>
+          <p class="detail-meta" id="detailMeta"></p>
+          <button class="edit-btn" id="detailFavBtn" aria-label="编辑">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+          </button>
+          <button class="edit-btn" id="detailCopyBtn" aria-label="复制名字">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="detail-section">
+        <div class="detail-section-title-row">
+          <h3 class="section-title">作品列表</h3>
+          <span class="detail-checkin-count" id="detailCheckinCount">打卡次数：0次</span>
+        </div>
+        <div class="works-list" id="worksList"></div>
+      </div>
+    </div>
+
+    <!-- 打卡页面 -->
+    <div class="page" id="page-checkin">
+      <div class="checkin-body">
+        <div class="checkin-overview-row">
+          <div class="checkin-stat-card">
+            <div class="checkin-stat-value" id="checkinTotal">0</div>
+            <div class="checkin-stat-label">总打卡</div>
+          </div>
+          <div class="checkin-stat-card">
+            <div class="checkin-stat-value" id="checkinMonthCount">0</div>
+            <div class="checkin-stat-label">本月</div>
+          </div>
+        </div>
+        <div class="checkin-calendar-section">
+          <div class="checkin-calendar-header">
+            <button class="btn-secondary btn-sm" id="checkinPrevMonth">‹</button>
+            <div class="checkin-month-picker">
+              <span id="checkinYearBtn" class="checkin-year-btn">—</span>
+              <span class="checkin-month-sep"></span>
+              <span id="checkinMonthBtn" class="checkin-month-btn">—</span>
+            </div>
+            <button class="btn-secondary btn-sm" id="checkinNextMonth">›</button>
+          </div>
+          <!-- 年份选择列表 -->
+          <div id="checkinYearList" class="checkin-picker-list" style="display:none"></div>
+          <!-- 月份选择列表 -->
+          <div id="checkinMonthList" class="checkin-picker-list" style="display:none"></div>
+          <div class="checkin-calendar-weekdays">
+            <span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span>
+          </div>
+          <div class="checkin-calendar-grid" id="checkinCalendarGrid"></div>
+          <p class="checkin-tip">点击日期打卡，长按日期删除打卡（均需二次确认）</p>
+        </div>
+        <div class="checkin-records-section">
+          <button class="btn-primary checkin-stats-btn" onclick="openStatsPage()">查看打卡统计</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 打卡统计页 -->
+    <div class="page" id="page-stats">
+      <div class="stats-page-body" id="statsPageContent"></div>
+    </div>
+
+    <!-- 设置页 -->
+    <div class="page" id="page-settings">
+      <div class="sync-body">
+        <div class="sync-section">
+          <h3>随机抽取</h3>
+          <p class="sync-desc">随机抽取一位女优或一部作品</p>
+          <button class="btn-primary btn-block" id="settingsRandomBtn">🎲 开始随机抽取</button>
+        </div>
+        <div class="sync-section">
+          <h3>统计分析</h3>
+          <p class="sync-desc">查看女优和作品的数据统计</p>
+          <button class="btn-primary btn-block" id="settingsStatsBtn">📊 查看统计</button>
+        </div>
+        <div class="sync-section">
+          <h3>名称替换</h3>
+          <p class="sync-desc">将 API 获取的英文女优名自动替换为自定义名称（如 Kana Momonogi → 桃乃木香奈）</p>
+          <div class="sync-actions">
+            <button class="btn-primary" id="settingsNameMappingBtn">📝 管理替换规则</button>
+            <button class="btn-secondary" id="settingsApplyMappingBtn">⚡ 应用到已有数据</button>
+            <button class="btn-secondary" id="settingsMergeActressBtn">🔗 合并同名女优</button>
+          </div>
+          <p class="sync-mapping-count" id="syncMappingCount" style="margin-top:8px;font-size:12px;color:var(--text-secondary);">当前 0 条替换规则</p>
+        </div>
+        <div class="sync-section">
+          <h3>数据备份</h3>
+          <p class="sync-desc">将所有数据导出为 JSON 文件，或从 JSON 备份恢复</p>
+          <div class="sync-actions">
+            <button class="btn-primary" id="settingsExportBtn">📥 导出备份</button>
+            <button class="btn-secondary" id="settingsImportBtn">📤 导入文件</button>
+          </div>
+          <input type="file" id="settingsImportFile" accept=".json" style="display:none">
+          <p class="io-desc" id="ioHint">导入将以合并方式处理（保留现有数据）</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- 空状态 -->
+    <div class="empty-state" id="emptyState" style="display:none">
+      <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity="0.3"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+      <p id="emptyText">暂无数据</p>
+    </div>
+
+    <!-- 加载状态 -->
+    <div class="loading-state" id="loadingState">
+      <div class="spinner-large"></div>
+      <p>正在加载本地数据...</p>
+      <p class="loading-hint">首次加载可能需要几秒钟</p>
+    </div>
+  </main>
+
+  <!-- 底部导航 -->
+  <nav class="bottom-nav" id="bottomNav">
+    <button class="nav-item active" data-page="home">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+      <span>首页</span>
+    </button>
+    <button class="nav-item" data-page="actresses">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+      <span>女优</span>
+    </button>
+    <button class="nav-item" data-page="works">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="2" y1="7" x2="7" y2="7"/><line x1="2" y1="17" x2="7" y2="17"/><line x1="17" y1="17" x2="22" y2="17"/><line x1="17" y1="7" x2="22" y2="7"/></svg>
+      <span>作品</span>
+    </button>
+  </nav>
+
+  <!-- 快捷菜单弹窗 -->
+  <!-- 添加/编辑番号弹窗 -->
+  <div id="video-modal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2 id="video-modal-title">添加作品</h2>
+        <button class="btn-close">&times;</button>
+      </div>
+      <form id="video-form">
+        <input type="hidden" id="video-id">
+        <div class="form-group">
+          <label>番号 *</label>
+          <input type="text" id="video-code" placeholder="例: ABCD-123" required>
+          <button type="button" class="btn-secondary btn-api-fetch" id="btn-api-fetch">API获取</button>
+        </div>
+      <div class="form-group">
+        <label>标题</label>
+        <input type="text" id="video-title" placeholder="作品标题">
+      </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>女优</label>
+            <input type="text" id="video-actresses" placeholder="多个用逗号分隔">
+          </div>
+          <div class="form-group">
+            <label>片商</label>
+            <input type="text" id="video-studio" placeholder="例: S1">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>年份</label>
+            <input type="text" id="video-year" placeholder="例: 2023">
+          </div>
+          <div class="form-group">
+            <label>发行日期</label>
+            <input type="date" id="video-date">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>时长</label>
+            <input type="text" id="video-duration" placeholder="例: 01:58:34">
+          </div>
+          <div class="form-group">
+            <label>画质</label>
+            <input type="text" id="video-quality" placeholder="例: HD">
+          </div>
+        </div>
+        <div class="form-group">
+          <label>标签</label>
+          <input type="text" id="video-tags" placeholder="多个用逗号分隔">
+        </div>
+        <div class="form-group">
+          <label>封面图片</label>
+          <input type="file" id="video-cover" accept="image/*">
+          <div id="video-cover-preview" class="image-preview"></div>
+        </div>
+        <div class="form-group">
+          <label>封面链接（URL）</label>
+          <input type="text" id="video-cover-url" placeholder="粘贴封面图片URL">
+        </div>
+        <div class="form-group">
+          <label>播放链接</label>
+          <input type="text" id="video-playlink" placeholder="播放页面URL">
+        </div>
+        <div class="form-group">
+          <label>简介</label>
+          <textarea id="video-description" rows="3" placeholder="作品简介..."></textarea>
+        </div>
+        <div class="form-group">
+          <label>备注</label>
+          <textarea id="video-note" rows="2" placeholder="个人备注..."></textarea>
+        </div>
+        <div class="form-actions">
+          <button type="button" class="btn-delete" id="btn-delete-video" style="display:none">删除</button>
+          <button type="submit" class="btn-primary">保存</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- 添加/编辑女优弹窗 -->
+  <div id="actress-modal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2 id="actress-modal-title">添加女优</h2>
+        <button class="btn-close">&times;</button>
+      </div>
+      <form id="actress-form">
+        <input type="hidden" id="actress-id">
+        <div class="form-group">
+          <label>名字 *</label>
+          <input type="text" id="actress-name" placeholder="例: 松本いちか" required>
+        </div>
+        <div class="form-group">
+          <label>显示名替换 <span style="font-weight:400;color:var(--text-secondary);font-size:11px;">（可选）</span></label>
+          <input type="text" id="actress-display-name" placeholder="留空则显示原名，填写后全局替换显示">
+          <p style="font-size:11px;color:var(--text-secondary);margin-top:4px;line-height:1.4;">填写后，原名会自动加入名称替换规则，女优列表、详情页、随机抽取等均显示替换名</p>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>生日</label>
+            <input type="text" id="actress-birthday" placeholder="如 1992年11月30日 或 1992-11-30" autocomplete="off">
+          </div>
+          <div class="form-group">
+            <label>身高 (cm)</label>
+            <input type="number" id="actress-height" placeholder="150">
+          </div>
+        </div>
+        <div class="form-group">
+          <label>头像图片</label>
+          <input type="file" id="actress-avatar" accept="image/*">
+          <div id="actress-avatar-preview" class="image-preview"></div>
+        </div>
+        <div class="form-group">
+          <label>备注</label>
+          <textarea id="actress-note" rows="3" placeholder="个人备注..."></textarea>
+        </div>
+        <div class="form-actions">
+          <button type="button" class="btn-delete" id="btn-delete-actress" style="display:none">删除</button>
+          <button type="submit" class="btn-primary">保存</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- 详情弹窗 -->
+  <div id="detail-modal" class="modal">
+    <div class="modal-content detail-modal-content">
+      <div class="modal-header">
+        <h2 id="detail-title">详情</h2>
+        <button class="btn-close">&times;</button>
+      </div>
+      <div id="detail-body"></div>
+    </div>
+  </div>
+
+  <!-- 随机抽取弹窗 -->
+  <div id="random-modal" class="modal">
+    <div class="modal-content random-modal-content">
+      <div class="modal-header">
+        <h2>🎲 随机抽取</h2>
+        <button class="btn-close">&times;</button>
+      </div>
+      <div class="random-body">
+        <!-- 抽取视图 -->
+        <div id="random-pick-view">
+          <div class="random-options">
+            <button class="random-option active" data-random="actress">随机女优</button>
+            <button class="random-option" data-random="video">随机作品</button>
+          </div>
+          <div id="random-result" class="random-result">
+            <div class="random-placeholder">点击按钮开始抽取</div>
+          </div>
+          <div class="random-action-row">
+            <button id="btn-do-random" class="btn-primary" style="flex:1;">开始抽取</button>
+            <button id="btn-show-history" class="btn-secondary">查看记录</button>
+          </div>
+        </div>
+        <!-- 历史记录视图 -->
+        <div id="random-history-view" style="display:none">
+          <div class="random-history-header">
+            <h3>抽取记录</h3>
+            <button class="btn-delete btn-sm" id="btn-clear-history">清空记录</button>
+          </div>
+          <div id="random-history-list" class="random-history-list"></div>
+          <button id="btn-back-to-pick" class="btn-secondary btn-block" style="margin-top:12px;">返回抽取</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 打卡弹窗 -->
+  <div id="checkin-modal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2 id="checkin-modal-title">打卡</h2>
+        <button class="btn-close">&times;</button>
+      </div>
+      <div class="checkin-modal-body">
+        <div class="form-group">
+          <label>搜索条目</label>
+          <input type="text" id="checkin-search-input" class="form-input" placeholder="搜索/输入番号或演员名" autocomplete="off" enterkeyhint="done">
+          <div id="checkin-suggest-list" class="checkin-suggest-list"></div>
+          <p class="checkin-no-match" id="checkin-no-match" style="display:none">未找到本地条目，可直接输入自定义内容打卡</p>
+          <div class="checkin-custom-row" id="checkin-custom-row" style="display:none">
+            <span class="checkin-custom-tag">自定义条目</span>
+            <label class="checkin-save-local"><input type="checkbox" id="checkin-save-local"> 保存至本地库</label>
+            <button class="btn-secondary btn-sm" id="checkin-add-custom">添加</button>
+          </div>
+          <p class="checkin-linked-hint" id="checkin-linked-hint"></p>
+        </div>
+        <div class="form-group" id="checkin-pending-group" style="display:none">
+          <label>已选条目（点击 × 移除）</label>
+          <div id="checkin-pending-list" class="checkin-pending-list"></div>
+        </div>
+        <div class="form-group">
+          <label>备注</label>
+          <textarea id="checkin-note" rows="3" placeholder="补充描述..."></textarea>
+        </div>
+        <div class="checkin-action-row">
+          <button class="btn-secondary" id="checkin-clear-btn">清空选择</button>
+          <button class="btn-primary" id="btn-do-checkin">确认打卡</button>
+        </div>
+        <div id="checkin-existing-list" class="checkin-existing-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 名称替换管理弹窗 -->
+  <div id="name-mapping-modal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>📝 名称替换管理</h2>
+        <button class="btn-close">&times;</button>
+      </div>
+      <div class="name-mapping-body">
+        <div class="name-mapping-form">
+          <div class="name-mapping-input-row">
+            <input type="text" id="mappingOriginal" placeholder="原名，多个用逗号隔开 如 Airi Suzumura,Suzumura Airi" autocomplete="off">
+            <span class="name-mapping-arrow">→</span>
+            <input type="text" id="mappingReplacement" placeholder="替换名（中文）如 桃乃木香奈" autocomplete="off">
+          </div>
+          <p style="font-size:11px;color:var(--text-secondary);margin-top:4px;line-height:1.4;">原名支持填写多个，用英文逗号隔开，导入时匹配任意一个都会显示替换名</p>
+          <button class="btn-primary btn-block" id="btnAddMapping" style="margin-top:10px;">添加替换规则</button>
+        </div>
+        <div class="name-mapping-divider"><span>已有规则</span></div>
+        <div id="nameMappingList" class="name-mapping-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 在线播放源选择弹窗 -->
+  <div id="play-source-modal" class="modal modal-sm">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>选择播放源</h2>
+        <button class="btn-close">&times;</button>
+      </div>
+      <div class="play-source-body">
+        <button class="play-source-btn" data-source="jable" id="playSourceJable">🍿 Jable.tv</button>
+        <button class="play-source-btn" data-source="whos" id="playSourceWhos">🔍 Whos.tv</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 站点导航弹窗 -->
+  <div id="sites-modal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>🔗 站点导航</h2>
+        <button class="btn-close">&times;</button>
+      </div>
+      <div class="sites-modal-body">
+        <button class="btn-primary btn-sm btn-block" id="sitesAddBtn" style="margin-bottom:14px;">＋ 添加站点</button>
+        <div id="sitesList"></div>
+        <p class="sites-empty" id="sitesEmpty" style="display:none;text-align:center;color:var(--text-secondary);padding:40px 0;">暂无保存的站点</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <!-- 全局统一确认弹窗（替换所有原生 alert/confirm） -->
+  <div id="confirm-modal" class="modal modal-sm">
+    <div class="modal-content">
+      <div class="confirm-dialog-body">
+        <h3 class="confirm-dialog-title" id="confirmDialogTitle">确认操作</h3>
+        <p class="confirm-dialog-text" id="confirmDialogText"></p>
+        <div class="confirm-dialog-actions">
+          <button class="confirm-dialog-btn confirm-dialog-cancel" id="confirmDialogCancel">取消</button>
+          <button class="confirm-dialog-btn confirm-dialog-ok" id="confirmDialogOk">确定</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <!-- 全局加载遮罩 -->
+  <div class="global-loading-overlay" id="globalLoadingOverlay">
+    <div class="global-loading-box">
+      <div class="spinner-large"></div>
+      <p class="global-loading-text" id="globalLoadingText">正在导出...</p>
+    </div>
+  </div>
+
+  <!-- Scripts（版本号用于防止 WebView 缓存旧版 JS，升级代码时递增） -->
+  <script src="js/db.js?v=42"></script>
+  <script src="js/app.js?v=42"></script>
+</body>
+</html>
