@@ -1,8 +1,6 @@
 // 本地数据存储 (localStorage + IndexedDB 图片库)
-// 将映射的 original 字段按逗号拆分为小写名称数组（original 可含多个别名，逗号分隔）
-function m_original_split(original) {
-  return original.split(',').map(o => o.trim().toLowerCase()).filter(Boolean);
-}
+// 公共纯函数（m_original_split / escapeHtml / normalizeVideoCode 等）见 js/utils.js，
+// 需在本文件之前加载。
 
 // 图片存储策略：图片主体放 IndexedDB，localStorage 里只保存轻量引用。
 // 优点：避免 base64 挤爆 localStorage；仍是纯前端、无权限、无后端；导出时再转回 JSON 内联图片。
@@ -12,6 +10,8 @@ const ImageStore = {
   refPrefix: 'idb://image/',
   _dbPromise: null,
   _urlCache: new Map(),
+  // blob URL 缓存上限：超过后回收「不再被任何 <img> 引用」的旧 URL，避免长会话内存持续增长
+  maxUrlCache: 300,
 
   isRef(value) {
     return typeof value === 'string' && value.startsWith(this.refPrefix);
@@ -79,7 +79,35 @@ const ImageStore = {
     if (!blob) return '';
     const url = URL.createObjectURL(blob);
     this._urlCache.set(key, url);
+    this._pruneUrlCache();
     return url;
+  },
+
+  // 回收超出上限的旧 blob URL。
+  // 注意：若某个 URL 仍被页面上的 <img> 使用，直接 revoke 会让该图变空白，
+  // 因此只回收「DOM 中已无引用」的条目；仍被引用的条目移到队尾，稍后再尝试。
+  _pruneUrlCache() {
+    while (this._urlCache.size > this.maxUrlCache) {
+      const oldestKey = this._urlCache.keys().next().value;
+      const url = this._urlCache.get(oldestKey);
+      if (this._isUrlInUse(url)) {
+        this._urlCache.delete(oldestKey);
+        this._urlCache.set(oldestKey, url);
+        return; // 队首仍在使用，本轮不再回收（其它都在使用中）
+      }
+      if (url) URL.revokeObjectURL(url);
+      this._urlCache.delete(oldestKey);
+    }
+  },
+
+  _isUrlInUse(url) {
+    if (!url || typeof document === 'undefined') return true;
+    try {
+      return !!document.querySelector(`img[src="${url}"]`);
+    } catch (err) {
+      // URL 含特殊字符导致选择器非法：保守认为仍在使用，不做回收
+      return true;
+    }
   },
 
   async delete(ref) {
@@ -141,14 +169,17 @@ const DB = {
   _actressesCache: null,
   _nameMappingsCache: null,
 
+  // 注意：返回的是缓存数组的浅拷贝。调用方可自由排序/截取，不会污染内部缓存顺序；
+  // 元素对象本身仍与缓存共享引用，因此「修改元素字段 + saveVideos()」的方式依然有效。
   getVideos() {
-    if (this._videosCache) return this._videosCache;
-    try {
-      this._videosCache = JSON.parse(localStorage.getItem(this._keyVideos)) || [];
-    } catch {
-      this._videosCache = [];
+    if (!this._videosCache) {
+      try {
+        this._videosCache = JSON.parse(localStorage.getItem(this._keyVideos)) || [];
+      } catch {
+        this._videosCache = [];
+      }
     }
-    return this._videosCache;
+    return this._videosCache.slice();
   },
 
   saveVideos(videos) {
@@ -178,7 +209,7 @@ const DB = {
       }
     }
     // 不存在则新增
-    video.id = video.id || 'v_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6);
+    video.id = video.id || 'v_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
     video.createdAt = video.createdAt || new Date().toISOString();
     videos.push(video);
     this.saveVideos(videos);
@@ -200,20 +231,33 @@ const DB = {
   },
 
   deleteVideo(id) {
-    const old = this.getVideo(id);
-    if (old && ImageStore.isRef(old.cover)) ImageStore.delete(old.cover);
-    const videos = this.getVideos().filter(v => v.id !== id);
-    this.saveVideos(videos);
+    this.deleteVideos([id]);
   },
 
+  // 批量删除：一次性清理图片引用并只写一次 localStorage（避免逐条落盘的 O(n²) 开销）
+  deleteVideos(ids) {
+    const idSet = new Set(ids);
+    if (idSet.size === 0) return 0;
+    const videos = this.getVideos();
+    videos.forEach(v => {
+      if (idSet.has(v.id) && v.cover && ImageStore.isRef(v.cover)) ImageStore.delete(v.cover);
+    });
+    const remain = videos.filter(v => !idSet.has(v.id));
+    const removed = videos.length - remain.length;
+    if (removed > 0) this.saveVideos(remain);
+    return removed;
+  },
+
+  // 同 getVideos()：返回浅拷贝，避免调用方排序污染缓存顺序
   getActresses() {
-    if (this._actressesCache) return this._actressesCache;
-    try {
-      this._actressesCache = JSON.parse(localStorage.getItem(this._keyActresses)) || [];
-    } catch {
-      this._actressesCache = [];
+    if (!this._actressesCache) {
+      try {
+        this._actressesCache = JSON.parse(localStorage.getItem(this._keyActresses)) || [];
+      } catch {
+        this._actressesCache = [];
+      }
     }
-    return this._actressesCache;
+    return this._actressesCache.slice();
   },
 
   saveActresses(actresses) {
@@ -297,7 +341,7 @@ const DB = {
       // 已存在则返回已有记录，不创建重复
       return existing;
     }
-    actress.id = actress.id || 'a_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6);
+    actress.id = actress.id || 'a_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
     actress.createdAt = actress.createdAt || new Date().toISOString();
     actress.favorited = actress.favorited || false;
     actresses.push(actress);
@@ -319,22 +363,21 @@ const DB = {
   },
 
   deleteActress(id) {
-    const old = this.getActress(id);
-    if (old && ImageStore.isRef(old.avatar)) ImageStore.delete(old.avatar);
-    const actresses = this.getActresses().filter(a => a.id !== id);
-    this.saveActresses(actresses);
+    this.deleteActresses([id]);
   },
 
-  toggleActressFavorite(id) {
-    const actress = this.getActress(id);
-    if (!actress) return null;
-    actress.favorited = !actress.favorited;
-    this.updateActress(id, { favorited: actress.favorited });
-    return actress.favorited;
-  },
-
-  getFavoriteActresses() {
-    return this.getActresses().filter(a => a.favorited);
+  // 批量删除：同 deleteVideos()，一次性清理头像引用并只写一次 localStorage
+  deleteActresses(ids) {
+    const idSet = new Set(ids);
+    if (idSet.size === 0) return 0;
+    const actresses = this.getActresses();
+    actresses.forEach(a => {
+      if (idSet.has(a.id) && a.avatar && ImageStore.isRef(a.avatar)) ImageStore.delete(a.avatar);
+    });
+    const remain = actresses.filter(a => !idSet.has(a.id));
+    const removed = actresses.length - remain.length;
+    if (removed > 0) this.saveActresses(remain);
+    return removed;
   },
 
   // 图片压缩后存入 IndexedDB，返回 idb://image/... 引用，避免占用 localStorage 配额
@@ -445,20 +488,6 @@ const DB = {
     return count;
   },
 
-  // 统计数据
-  getStats() {
-    const videos = this.getVideos();
-    const actresses = this.getActresses();
-    return {
-      videoCount: videos.length,
-      actressCount: actresses.length,
-      ratedCount: videos.filter(v => v.rating).length,
-      withCoverCount: videos.filter(v => v.cover).length,
-      withAvatarCount: actresses.filter(a => a.avatar).length,
-      favoriteCount: actresses.filter(a => a.favorited).length
-    };
-  },
-
   // 随机抽取记录
   getRandomHistory() {
     try {
@@ -471,7 +500,7 @@ const DB = {
   addRandomHistory(type, item) {
     const history = this.getRandomHistory();
     const record = {
-      id: 'h_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
+      id: 'h_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
       type: type,
       itemId: item.id,
       // 女优类型：记录替换后的显示名
@@ -496,14 +525,16 @@ const DB = {
   },
 
   // ==================== 名称替换映射 ====================
+  // 同 getVideos()：返回浅拷贝，避免调用方排序污染缓存顺序
   getNameMappings() {
-    if (this._nameMappingsCache) return this._nameMappingsCache;
-    try {
-      this._nameMappingsCache = JSON.parse(localStorage.getItem(this._keyNameMappings)) || [];
-    } catch {
-      this._nameMappingsCache = [];
+    if (!this._nameMappingsCache) {
+      try {
+        this._nameMappingsCache = JSON.parse(localStorage.getItem(this._keyNameMappings)) || [];
+      } catch {
+        this._nameMappingsCache = [];
+      }
     }
-    return this._nameMappingsCache;
+    return this._nameMappingsCache.slice();
   },
 
   saveNameMappings(mappings) {
@@ -535,7 +566,7 @@ const DB = {
       existing.updatedAt = new Date().toISOString();
     } else {
       mappings.push({
-        id: 'nm_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
+        id: 'nm_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
         original: original.trim(),
         replacement: replacement.trim(),
         createdAt: new Date().toISOString()
@@ -684,12 +715,11 @@ const DB = {
         replaceMap.set(a.name.trim().toLowerCase(), keep.name);
       });
 
-      // 更新作品：将被删除女优的名称替换为保留女优的名称
-      videos.forEach(v => {
-        if (!v.actresses) return;
-        const names = v.actresses.split(',').map(n => n.trim());
+      // 将逗号分隔的名称串按 replaceMap 替换为保留女优名，并去重
+      const remapNameList = (str) => {
+        const names = str.split(',').map(n => n.trim());
         let changed = false;
-        const newNames = names.map(n => {
+        const mapped = names.map(n => {
           if (!n) return n;
           const rep = replaceMap.get(n.toLowerCase());
           if (rep && rep.toLowerCase() !== n.toLowerCase()) {
@@ -698,23 +728,35 @@ const DB = {
           }
           return n;
         });
-        if (changed) {
-          // 去重
-          const seen = new Set();
-          v.actresses = newNames.filter(n => {
-            if (!n) return false;
-            const k = n.toLowerCase();
-            if (seen.has(k)) return false;
-            seen.add(k);
-            return true;
-          }).join(',');
+        if (!changed) return str;
+        const seen = new Set();
+        return mapped.filter(n => {
+          if (!n) return false;
+          const k = n.toLowerCase();
+          if (seen.has(k)) return false;
+          seen.add(k);
+          return true;
+        }).join(',');
+      };
+
+      // 更新作品：将被删除女优的名称替换为保留女优的名称
+      videos.forEach(v => {
+        if (!v.actresses) return;
+        const next = remapNameList(v.actresses);
+        if (next !== v.actresses) {
+          v.actresses = next;
           v.updatedAt = new Date().toISOString();
         }
       });
 
-      // 更新打卡记录
+      // 更新打卡记录：女优类记录迁移 targetId；作品类记录的 targetActress 也要重映射，
+      // 否则合并后按女优统计打卡次数会漏计
       const removeIdSet = new Set(toRemove.map(a => a.id));
       checkins.forEach(c => {
+        if (c.targetActress) {
+          const next = remapNameList(c.targetActress);
+          if (next !== c.targetActress) c.targetActress = next;
+        }
         if (c.targetType === 'actress') {
           if (removeIdSet.has(c.targetId)) {
             c.targetId = keep.id;
@@ -728,7 +770,12 @@ const DB = {
 
       // 合并元数据：将被删除女优的信息补充到保留女优
       toRemove.forEach(a => {
-        if (!keep.avatar && a.avatar) keep.avatar = a.avatar;
+        if (!keep.avatar && a.avatar) {
+          keep.avatar = a.avatar; // 头像由保留女优接管
+        } else if (a.avatar && a.avatar !== keep.avatar && ImageStore.isRef(a.avatar)) {
+          // 未被接管：清理 IndexedDB 图片，避免残留
+          ImageStore.delete(a.avatar);
+        }
         if (!keep.birthday && a.birthday) keep.birthday = a.birthday;
         if (!keep.height && a.height) keep.height = a.height;
         if (!keep.measurements && a.measurements) keep.measurements = a.measurements;
@@ -771,7 +818,7 @@ const DB = {
   addCheckin(data) {
     const checkins = this.getCheckins();
     const record = {
-      id: 'c_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
+      id: 'c_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
       date: data.date,
       targetType: data.targetType, // 'actress' | 'work' | 'custom'
       targetId: data.targetId || '',
@@ -933,12 +980,12 @@ const DB = {
     // 数据校验与清理
     const validVideos = videos.filter(v => v.code || v.id).map(v => ({
       ...v,
-      id: v.id || 'v_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6)
+      id: v.id || 'v_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8)
     }));
 
     const validActresses = actresses.filter(a => a.name || a.id).map(a => ({
       ...a,
-      id: a.id || 'a_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
+      id: a.id || 'a_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
       favorited: a.favorited || false
     }));
 

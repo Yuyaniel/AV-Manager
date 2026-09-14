@@ -7,7 +7,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>AV Manager — 女优作品管理器</title>
-  <link rel="stylesheet" href="css/style.css?v=42">
+  <link rel="stylesheet" href="css/style.css?v=54">
 </head>
 <body>
   <!-- 顶部导航栏 -->
@@ -118,6 +118,7 @@
           <button class="btn-secondary btn-sm" id="importWorkBtn">添加作品</button>
           <span class="batch-info" id="batchInfoWork" style="display:none">已选 0 项</span>
         </div>
+        <button class="btn-secondary btn-sm" id="exportWorkBtn">导出作品</button>
       </div>
       <div class="status-bar">
         <span class="status-text" id="statusTextWork">加载中...</span>
@@ -154,7 +155,10 @@
       <div class="detail-section">
         <div class="detail-section-title-row">
           <h3 class="section-title">作品列表</h3>
-          <span class="detail-checkin-count" id="detailCheckinCount">打卡次数：0次</span>
+          <div class="detail-section-actions">
+            <span class="detail-checkin-count" id="detailCheckinCount">打卡次数：0次</span>
+            <button class="btn-primary btn-sm detail-add-work-btn" id="detailAddWorkBtn">＋ 添加作品</button>
+          </div>
         </div>
         <div class="works-list" id="worksList"></div>
       </div>
@@ -194,29 +198,90 @@
           <p class="checkin-tip">点击日期打卡，长按日期删除打卡（均需二次确认）</p>
         </div>
         <div class="checkin-records-section">
-          <button class="btn-primary checkin-stats-btn" onclick="openStatsPage()">查看打卡统计</button>
+          <button class="btn-primary checkin-stats-btn" id="checkinStatsBtn">查看打卡统计</button>
         </div>
       </div>
     </div>
 
     <!-- 打卡统计页 -->
     <div class="page" id="page-stats">
-      <div class="stats-page-body" id="statsPageContent"></div>
+      <div class="search-bar">
+        <div class="search-inner">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+          <input type="text" id="searchInputCheckin" placeholder="搜索打卡记录（番号或女优）..." autocomplete="off" enterkeyhint="search">
+          <span class="search-count" id="searchCountCheckin"></span>
+          <button class="search-clear" id="searchClearCheckin" aria-label="清除">✕</button>
+        </div>
+      </div>
+      <div class="stats-page-body">
+        <div id="statsSearchResults" class="checkin-search-results" style="display:none"></div>
+        <div id="statsPageContent"></div>
+      </div>
     </div>
 
     <!-- 设置页 -->
     <div class="page" id="page-settings">
+      <div class="settings-menu-list">
+        <div class="settings-menu-item" data-settings-menu="random">
+          <span class="settings-menu-icon">🎲</span>
+          <div class="settings-menu-text">
+            <div class="settings-menu-title">随机抽取</div>
+            <div class="settings-menu-desc">随机抽取一位女优或一部作品</div>
+          </div>
+          <span class="settings-menu-arrow">›</span>
+        </div>
+        <div class="settings-menu-item" data-settings-menu="stats">
+          <span class="settings-menu-icon">📊</span>
+          <div class="settings-menu-text">
+            <div class="settings-menu-title">统计分析</div>
+            <div class="settings-menu-desc">查看女优和作品的数据统计</div>
+          </div>
+          <span class="settings-menu-arrow">›</span>
+        </div>
+        <div class="settings-menu-item" data-settings-menu="name">
+          <span class="settings-menu-icon">📝</span>
+          <div class="settings-menu-text">
+            <div class="settings-menu-title">名称替换</div>
+            <div class="settings-menu-desc">管理英文名自动替换规则</div>
+          </div>
+          <span class="settings-menu-arrow">›</span>
+        </div>
+        <div class="settings-menu-item" data-settings-menu="backup">
+          <span class="settings-menu-icon">💾</span>
+          <div class="settings-menu-text">
+            <div class="settings-menu-title">数据备份</div>
+            <div class="settings-menu-desc">本地导出、文件导入与 WebDAV 云备份</div>
+          </div>
+          <span class="settings-menu-arrow">›</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 随机抽取 二级页 -->
+    <div class="page" id="page-settings-random">
       <div class="sync-body">
         <div class="sync-section">
           <h3>随机抽取</h3>
           <p class="sync-desc">随机抽取一位女优或一部作品</p>
           <button class="btn-primary btn-block" id="settingsRandomBtn">🎲 开始随机抽取</button>
         </div>
+      </div>
+    </div>
+
+    <!-- 统计分析 二级页 -->
+    <div class="page" id="page-settings-stats">
+      <div class="sync-body">
         <div class="sync-section">
           <h3>统计分析</h3>
           <p class="sync-desc">查看女优和作品的数据统计</p>
           <button class="btn-primary btn-block" id="settingsStatsBtn">📊 查看统计</button>
         </div>
+      </div>
+    </div>
+
+    <!-- 名称替换 二级页 -->
+    <div class="page" id="page-settings-name">
+      <div class="sync-body">
         <div class="sync-section">
           <h3>名称替换</h3>
           <p class="sync-desc">将 API 获取的英文女优名自动替换为自定义名称（如 Kana Momonogi → 桃乃木香奈）</p>
@@ -227,8 +292,14 @@
           </div>
           <p class="sync-mapping-count" id="syncMappingCount" style="margin-top:8px;font-size:12px;color:var(--text-secondary);">当前 0 条替换规则</p>
         </div>
+      </div>
+    </div>
+
+    <!-- 数据备份 二级页（含 WebDAV 备份） -->
+    <div class="page" id="page-settings-backup">
+      <div class="sync-body">
         <div class="sync-section">
-          <h3>数据备份</h3>
+          <h3>本地备份</h3>
           <p class="sync-desc">将所有数据导出为 JSON 文件，或从 JSON 备份恢复</p>
           <div class="sync-actions">
             <button class="btn-primary" id="settingsExportBtn">📥 导出备份</button>
@@ -236,6 +307,29 @@
           </div>
           <input type="file" id="settingsImportFile" accept=".json" style="display:none">
           <p class="io-desc" id="ioHint">导入将以合并方式处理（保留现有数据）</p>
+        </div>
+        <div class="sync-section">
+          <h3>WebDAV 云备份</h3>
+          <p class="sync-desc">将备份上传到 WebDAV 服务器（如坚果云、自建 NAS），可从云端恢复</p>
+          <div class="form-group">
+            <label>服务器地址</label>
+            <input type="text" id="webdavUrl" placeholder="https://dav.example.com/dav/" autocomplete="off">
+          </div>
+          <div class="form-group">
+            <label>用户名</label>
+            <input type="text" id="webdavUser" placeholder="WebDAV 账号" autocomplete="off">
+          </div>
+          <div class="form-group">
+            <label>密码</label>
+            <input type="password" id="webdavPass" placeholder="WebDAV 密码" autocomplete="off">
+          </div>
+          <div class="sync-actions">
+            <button class="btn-primary" id="webdavSaveBtn">💾 保存配置</button>
+            <button class="btn-secondary" id="webdavTestBtn">🔗 测试连接</button>
+            <button class="btn-secondary" id="webdavUploadBtn">☁️ 上传备份</button>
+            <button class="btn-secondary" id="webdavRestoreBtn">📥 从云端恢复</button>
+          </div>
+          <p class="io-desc" id="webdavHint">未配置。请先填写服务器地址、用户名、密码并保存。</p>
         </div>
       </div>
     </div>
@@ -246,12 +340,6 @@
       <p id="emptyText">暂无数据</p>
     </div>
 
-    <!-- 加载状态 -->
-    <div class="loading-state" id="loadingState">
-      <div class="spinner-large"></div>
-      <p>正在加载本地数据...</p>
-      <p class="loading-hint">首次加载可能需要几秒钟</p>
-    </div>
   </main>
 
   <!-- 底部导航 -->
@@ -292,7 +380,8 @@
         <div class="form-row">
           <div class="form-group">
             <label>女优</label>
-            <input type="text" id="video-actresses" placeholder="多个用逗号分隔">
+            <input type="text" id="video-actresses" placeholder="多个用逗号分隔" autocomplete="off">
+            <div id="videoActressSuggestList" class="video-actress-suggest-list"></div>
           </div>
           <div class="form-group">
             <label>片商</label>
@@ -453,14 +542,9 @@
       <div class="checkin-modal-body">
         <div class="form-group">
           <label>搜索条目</label>
-          <input type="text" id="checkin-search-input" class="form-input" placeholder="搜索/输入番号或演员名" autocomplete="off" enterkeyhint="done">
+          <input type="text" id="checkin-search-input" class="form-input" placeholder="搜索番号或女优名" autocomplete="off" enterkeyhint="done">
           <div id="checkin-suggest-list" class="checkin-suggest-list"></div>
-          <p class="checkin-no-match" id="checkin-no-match" style="display:none">未找到本地条目，可直接输入自定义内容打卡</p>
-          <div class="checkin-custom-row" id="checkin-custom-row" style="display:none">
-            <span class="checkin-custom-tag">自定义条目</span>
-            <label class="checkin-save-local"><input type="checkbox" id="checkin-save-local"> 保存至本地库</label>
-            <button class="btn-secondary btn-sm" id="checkin-add-custom">添加</button>
-          </div>
+          <p class="checkin-no-match" id="checkin-no-match" style="display:none">未找到本地条目，请先添加作品或女优</p>
           <p class="checkin-linked-hint" id="checkin-linked-hint"></p>
         </div>
         <div class="form-group" id="checkin-pending-group" style="display:none">
@@ -557,8 +641,10 @@
     </div>
   </div>
 
-  <!-- Scripts（版本号用于防止 WebView 缓存旧版 JS，升级代码时递增） -->
-  <script src="js/db.js?v=42"></script>
-  <script src="js/app.js?v=42"></script>
+  <!-- Scripts（版本号用于防止 WebView 缓存旧版 JS，升级代码时递增）
+       加载顺序：utils（公共纯函数） → db（数据层） → app（界面逻辑） -->
+  <script src="js/utils.js?v=54"></script>
+  <script src="js/db.js?v=54"></script>
+  <script src="js/app.js?v=54"></script>
 </body>
 </html>

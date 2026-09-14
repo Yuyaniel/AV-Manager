@@ -5,6 +5,7 @@
   "main": "index.html",
   "scripts": {
     "start": "npx serve .",
+    "check": "node --check js/utils.js && node --check js/db.js && node --check js/app.js",
     "build": "echo '静态项目，无需构建，直接打包即可'",
     "cap:add:android": "npx cap add android",
     "cap:add:ios": "npx cap add ios",

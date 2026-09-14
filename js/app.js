@@ -11,10 +11,13 @@ let currentVideoId = null;
 let currentRandomType = 'actress';
 let isRandomRolling = false;
 let actressWorksCountMap = {};
+// 女优 id -> 全部名称变体（原名/别名/替换名）缓存，随 updateActressWorksCount() 一起重建，
+// 避免搜索、详情页、打卡提示等热路径反复遍历全部名称映射。
+let actressAllNamesMap = {};
 let checkinCurrentDate = '';
 let checkinViewYear = 0;
 let checkinViewMonth = 0;
-// 已勾选待提交的打卡条目（临时缓存，确认后才写入）：{ type:'actress'|'work'|'custom', id, name(显示名), code(番号), actress(关联演员) }
+// 已勾选待提交的打卡条目（临时缓存，确认后才写入）：{ type:'actress'|'work', id, name(显示名), code(番号), actress(关联演员) }
 let checkinPendingEntries = [];
 // 页面导航历史栈
 let pageHistory = [];
@@ -32,7 +35,6 @@ const els = {
   settingsIconWrap: document.getElementById('settingsIconWrap'),
   pages: document.querySelectorAll('.page'),
   navItems: document.querySelectorAll('.nav-item'),
-  loadingState: document.getElementById('loadingState'),
   // 首页
   homeStatActress: document.getElementById('homeStatActress'),
   homeStatVideo: document.getElementById('homeStatVideo'),
@@ -61,6 +63,7 @@ const els = {
   worksGrid: document.getElementById('worksGrid'),
   batchWorkBtn: document.getElementById('batchWorkBtn'),
   importWorkBtn: document.getElementById('importWorkBtn'),
+  exportWorkBtn: document.getElementById('exportWorkBtn'),
   batchInfoWork: document.getElementById('batchInfoWork'),
   batchBarWork: document.getElementById('batchBarWork'),
   batchSelectAllWork: document.getElementById('batchSelectAllWork'),
@@ -93,22 +96,33 @@ const els = {
   randomHistoryView: document.getElementById('random-history-view'),
   randomHistoryList: document.getElementById('random-history-list'),
   statsPageContent: document.getElementById('statsPageContent'),
+  searchInputCheckin: document.getElementById('searchInputCheckin'),
+  searchClearCheckin: document.getElementById('searchClearCheckin'),
+  searchCountCheckin: document.getElementById('searchCountCheckin'),
+  statsSearchResults: document.getElementById('statsSearchResults'),
   confirmModal: document.getElementById('confirm-modal'),
   confirmDialogTitle: document.getElementById('confirmDialogTitle'),
   confirmDialogText: document.getElementById('confirmDialogText'),
   confirmDialogCancel: document.getElementById('confirmDialogCancel'),
   confirmDialogOk: document.getElementById('confirmDialogOk'),
   settingsImportFile: document.getElementById('settingsImportFile'),
+  webdavUrl: document.getElementById('webdavUrl'),
+  webdavUser: document.getElementById('webdavUser'),
+  webdavPass: document.getElementById('webdavPass'),
+  webdavSaveBtn: document.getElementById('webdavSaveBtn'),
+  webdavTestBtn: document.getElementById('webdavTestBtn'),
+  webdavUploadBtn: document.getElementById('webdavUploadBtn'),
+  webdavRestoreBtn: document.getElementById('webdavRestoreBtn'),
+  webdavHint: document.getElementById('webdavHint'),
   // 打卡
   checkinModal: document.getElementById('checkin-modal'),
   checkinModalTitle: document.getElementById('checkin-modal-title'),
   checkinSearchInput: document.getElementById('checkin-search-input'),
   checkinSuggestList: document.getElementById('checkin-suggest-list'),
   checkinNoMatch: document.getElementById('checkin-no-match'),
-  checkinCustomRow: document.getElementById('checkin-custom-row'),
-  checkinSaveLocal: document.getElementById('checkin-save-local'),
-  checkinAddCustom: document.getElementById('checkin-add-custom'),
   checkinLinkedHint: document.getElementById('checkin-linked-hint'),
+  videoActressesInput: document.getElementById('video-actresses'),
+  videoActressSuggestList: document.getElementById('videoActressSuggestList'),
   checkinPendingGroup: document.getElementById('checkin-pending-group'),
   checkinPendingList: document.getElementById('checkin-pending-list'),
   checkinClearBtn: document.getElementById('checkin-clear-btn'),
@@ -137,34 +151,77 @@ const els = {
 document.addEventListener('DOMContentLoaded', () => {
   bindEvents();
   initBackButton();
-  if (window.MutationObserver) {
-    new MutationObserver(mutations => {
-      mutations.forEach(m => m.addedNodes.forEach(node => {
-        if (node.nodeType === 1) hydrateImages(node);
-      }));
-    }).observe(document.body, { childList: true, subtree: true });
-  }
+  observeNewImages();
   init();
 });
 
-function init() {
-  showLoading(true);
-  setTimeout(() => {
-    updateActressWorksCount();
-    showLoading(false);
-    showPage('page-home', false);
-    updateHomeStats();
-    // 后台迁移旧版 base64 图片到 IndexedDB（不阻塞界面）
-    if (window.indexedDB) {
-      DB.migrateLegacyImages().then(n => {
-        if (n > 0) {
-          updateActressWorksCount();
-          refreshCurrentPage();
-          updateHomeStats();
-        }
-      }).catch(() => {});
+// 新插入的 DOM 里可能带 IndexedDB 图片占位（data-img-ref），统一做视口懒加载水合。
+// 批量渲染会高频插入节点，这里把多次变更合并到一次 rAF，避免重复扫描子树。
+function observeNewImages() {
+  if (!window.MutationObserver) return;
+  const pendingRoots = new Set();
+  let scheduled = false;
+
+  const flush = () => {
+    scheduled = false;
+    const roots = [...pendingRoots];
+    pendingRoots.clear();
+    roots.forEach(node => {
+      if (node.isConnected) hydrateImages(node);
+    });
+  };
+
+  new MutationObserver(mutations => {
+    mutations.forEach(m => m.addedNodes.forEach(node => {
+      if (node.nodeType !== 1 || !node.isConnected) return;
+      // 已入队节点的子孙无需重复入队
+      for (const root of pendingRoots) {
+        if (root === node || root.contains(node)) return;
+      }
+      pendingRoots.add(node);
+    }));
+    if (pendingRoots.size && !scheduled) {
+      scheduled = true;
+      requestAnimationFrame(flush);
     }
-  }, 300);
+  }).observe(document.body, { childList: true, subtree: true });
+}
+
+function init() {
+  // 本地数据为同步读取，无需加载遮罩与人为延迟，直接渲染首屏
+  updateActressWorksCount();
+  showPage('page-home', false);
+  updateHomeStats();
+  // 空闲时后台预热女优/作品列表：首次底栏切换时无需现场渲染
+  prefetchListPages();
+  // 后台迁移旧版 base64 图片到 IndexedDB（不阻塞界面）
+  if (window.indexedDB) {
+    DB.migrateLegacyImages().then(n => {
+      if (n > 0) {
+        updateActressWorksCount();
+        refreshCurrentPage();
+        updateHomeStats();
+      }
+    }).catch(() => {});
+  }
+}
+
+// 空闲预热：在后台预渲染女优/作品列表（页面此时 display:none，不参与布局/绘制）
+// 首次切换底栏时列表指纹一致 → 直接复用，切换零等待
+function prefetchListPages() {
+  const run = () => {
+    try {
+      if (actressFingerprint() !== _actressRenderFingerprint) renderActresses();
+      if (workFingerprint() !== _workRenderFingerprint) renderWorks();
+    } catch (err) {
+      console.warn('列表预热失败', err);
+    }
+  };
+  if (typeof requestIdleCallback === 'function') {
+    requestIdleCallback(run, { timeout: 2000 });
+  } else {
+    setTimeout(run, 600);
+  }
 }
 
 // ==================== 返回手势/按键处理（统一分层规则） ====================
@@ -226,7 +283,7 @@ function handleBackAction() {
 
 // ==================== 事件绑定 ====================
 function bindEvents() {
-  // 底部导航 — 使用 touchstart 实现零延迟响应（移动端），click 作为桌面端回退
+  // 底部导航 — 使用 touchend 实现零延迟响应（移动端），click 作为桌面端回退
   function handleNavClick(page) {
     pageHistory = [];
     if (page === 'home') {
@@ -241,26 +298,40 @@ function bindEvents() {
 
   els.navItems.forEach(btn => {
     let touchHandled = false;
-    let startX = 0, startY = 0;
+    let startX = 0, startY = 0, startAt = 0;
 
-    // 移动端：touchstart 立即触发，零延迟
+    // 点击判定：位移半径放宽到 25px（拇指快速点按常有 10~25px 轻微滑动，
+    // 浏览器自身 tap 阈值约 8~10px，过严会形成"点了没反应"的死区）
+    const isNavTap = (x, y) => {
+      if (Date.now() - startAt > 1000) return false; // 长按后抬起不当作点击
+      const dx = x - startX, dy = y - startY;
+      return dx * dx + dy * dy <= 25 * 25;
+    };
+
+    // 移动端：touchend 立即触发，零延迟
     btn.addEventListener('touchstart', (e) => {
-      startX = e.touches[0].clientX;
-      startY = e.touches[0].clientY;
+      const t = e.changedTouches[0];
+      if (!t) return;
+      touchHandled = false; // 新触摸开始，清除上次残留的去重标志
+      startX = t.clientX;
+      startY = t.clientY;
+      startAt = Date.now();
     }, { passive: true });
 
     btn.addEventListener('touchend', (e) => {
-      const touch = e.changedTouches[0];
-      const dx = Math.abs(touch.clientX - startX);
-      const dy = Math.abs(touch.clientY - startY);
-      // 仅当几乎没有移动时才视为点击（排除滑动）
-      if (dx < 10 && dy < 10) {
-        touchHandled = true;
-        handleNavClick(btn.dataset.page);
-      }
+      const t = e.changedTouches[0];
+      if (!t) return;
+      if (!isNavTap(t.clientX, t.clientY)) return;
+      touchHandled = true;
+      handleNavClick(btn.dataset.page);
     }, { passive: true });
 
-    // 桌面端：click 事件
+    // 滚动接管/来电等系统中断：重置状态等待下次触摸
+    btn.addEventListener('touchcancel', () => {
+      touchHandled = false;
+    }, { passive: true });
+
+    // 桌面端：click 事件；移动端 touchend 已处理过时去重
     btn.addEventListener('click', () => {
       if (touchHandled) {
         touchHandled = false;
@@ -290,6 +361,7 @@ function bindEvents() {
   });
   document.getElementById('homeStatsBtn').addEventListener('click', () => openStatsPage());
   document.getElementById('homeSitesBtn').addEventListener('click', openSitesModal);
+  document.getElementById('checkinStatsBtn').addEventListener('click', openStatsPage);
 
   // 首页统计卡片点击跳转
   els.homeStatActress.addEventListener('click', () => {
@@ -325,6 +397,13 @@ function bindEvents() {
     renderWorks();
   });
 
+  // 打卡记录搜索（统计页）
+  els.searchInputCheckin.addEventListener('input', () => renderCheckinSearch());
+  els.searchClearCheckin.addEventListener('click', () => {
+    els.searchInputCheckin.value = '';
+    renderCheckinSearch();
+  });
+
   // 视图切换（女优页）
   els.viewToggleActress.addEventListener('click', toggleActressViewMode);
 
@@ -349,6 +428,15 @@ function bindEvents() {
     copyActressName(DB.applyNameMapping(actress.name));
   });
 
+  // 详情页添加作品（预填当前女优名）
+  document.getElementById('detailAddWorkBtn').addEventListener('click', () => {
+    if (!detailActressId) return;
+    const actress = DB.getActress(detailActressId);
+    if (!actress) return;
+    openVideoModal();
+    document.getElementById('video-actresses').value = DB.applyNameMapping(actress.name);
+  });
+
   // 女优批量操作
   els.batchActressBtn.addEventListener('click', () => toggleBatchMode('actress'));
   els.batchSelectAllActress.addEventListener('click', () => selectAllBatch('actress'));
@@ -362,11 +450,27 @@ function bindEvents() {
   els.batchDeleteWork.addEventListener('click', () => deleteBatch('work'));
   els.batchCancelWork.addEventListener('click', () => exitBatchMode('work'));
   els.importWorkBtn.addEventListener('click', () => openVideoModal());
+  els.exportWorkBtn.addEventListener('click', exportWorksTxt);
   // 设置页按钮
   document.getElementById('settingsRandomBtn').addEventListener('click', openRandomModal);
   document.getElementById('settingsStatsBtn').addEventListener('click', () => openStatsPage());
   document.getElementById('settingsExportBtn').addEventListener('click', exportData);
   document.getElementById('settingsImportBtn').addEventListener('click', () => els.settingsImportFile.click());
+
+  // 设置页二级菜单点击
+  document.querySelectorAll('.settings-menu-item').forEach(item => {
+    item.addEventListener('click', () => {
+      const name = item.dataset.settingsMenu;
+      const map = { random: 'page-settings-random', stats: 'page-settings-stats', name: 'page-settings-name', backup: 'page-settings-backup' };
+      if (map[name]) showPage(map[name]);
+    });
+  });
+
+  // WebDAV 备份
+  els.webdavSaveBtn.addEventListener('click', saveWebdavConfig);
+  els.webdavTestBtn.addEventListener('click', testWebdavConnection);
+  els.webdavUploadBtn.addEventListener('click', uploadBackupToWebdav);
+  els.webdavRestoreBtn.addEventListener('click', restoreFromWebdav);
   els.settingsImportFile.addEventListener('change', importData);
 
   // 名称替换
@@ -436,7 +540,7 @@ function bindEvents() {
   els.checkinMonthBtn.addEventListener('click', toggleMonthPicker);
   els.checkinSearchInput.addEventListener('input', () => renderCheckinSuggestions());
   els.checkinSearchInput.addEventListener('focus', () => renderCheckinSuggestions());
-  els.checkinAddCustom.addEventListener('click', addCustomCheckinEntry);
+  setupVideoActressAutocomplete();
   els.checkinClearBtn.addEventListener('click', clearCheckinPending);
   els.btnDoCheckin.addEventListener('click', doCheckin);
 
@@ -520,10 +624,18 @@ function showPage(pageId, pushHistory = true) {
     renderStatsPage();
   } else if (pageId === 'page-settings') {
     updateHeader('设置', false);
-    // 刷新替换规则计数
+  } else if (pageId === 'page-settings-random') {
+    updateHeader('随机抽取', true);
+  } else if (pageId === 'page-settings-stats') {
+    updateHeader('统计分析', true);
+  } else if (pageId === 'page-settings-name') {
+    updateHeader('名称替换', true);
     if (els.syncMappingCount) {
       els.syncMappingCount.textContent = `当前 ${DB.getNameMappings().length} 条替换规则`;
     }
+  } else if (pageId === 'page-settings-backup') {
+    updateHeader('数据备份', true);
+    loadWebdavConfigIntoForm();
   }
 
   // 恢复目标页面的滚动位置（延迟到DOM渲染后）
@@ -602,10 +714,6 @@ function confirmExitApp() {
   }
 }
 
-function showLoading(show) {
-  els.loadingState.classList.toggle('show', show);
-}
-
 function imageAttr(value) {
   if (!value) return '';
   if (typeof ImageStore !== 'undefined' && ImageStore.isRef(value)) {
@@ -622,12 +730,46 @@ async function hydrateImages(root = document) {
   if (root.querySelectorAll) {
     root.querySelectorAll('img[data-img-ref]').forEach(img => imgs.push(img));
   }
-  imgs.forEach(async img => {
-    const ref = img.dataset.imgRef;
-    if (!ref || img.src) return;
+  if (!imgs.length) return;
+  const observer = getLazyImgObserver();
+  if (observer) {
+    // 懒加载：仅当图片接近视口时才从 IndexedDB 读取并解码，避免大数据量列表一次性全量加载卡顿
+    imgs.forEach(img => observer.observe(img));
+  } else {
+    // 老环境无 IntersectionObserver：立即加载
+    imgs.forEach(img => loadImgRef(img));
+  }
+}
+
+// 共享的懒加载观察器：统一为列表中的 IndexedDB 图片做视口懒加载
+let _lazyImgObserver = null;
+function getLazyImgObserver() {
+  if (_lazyImgObserver) return _lazyImgObserver;
+  if (typeof IntersectionObserver !== 'function') return null;
+  _lazyImgObserver = new IntersectionObserver(entries => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        const img = entry.target;
+        _lazyImgObserver.unobserve(img);
+        loadImgRef(img);
+      }
+    });
+  }, { rootMargin: '240px 0px' });
+  return _lazyImgObserver;
+}
+
+// 加载单个 IndexedDB 图片引用
+async function loadImgRef(img) {
+  const ref = img.dataset.imgRef;
+  if (!ref || img.src) return;
+  try {
     const src = await DB.getImageSrc(ref);
-    if (src) img.src = src;
-  });
+    // 兼容 href(旧 Promise/getAttribute) 之外的 getImageSrc；若仍无 src 则跳过
+    if (src && !img.src) img.src = src;
+  } catch (e) {
+    // 单个图片加载失败不影响整体
+  }
+  img.removeAttribute('data-img-ref');
 }
 
 // ==================== 全局统一确认弹窗（替换原生 alert/confirm） ====================
@@ -721,8 +863,13 @@ function loadActressList(resetSearch = false) {
   applyActressViewMode();
   updateActressStatus();
   const fp = actressFingerprint();
+  // 列表未变化：跳过重渲染（滚动位置已由 showPage 恢复）
+  if (fp === _actressRenderFingerprint) return;
+  // 列表有变化：推迟一帧再渲染，让页面切换帧只绘制轻量框架（页头/底栏），
+  // 避免卡片构建与图片水合挤在切换瞬间造成卡顿
   requestAnimationFrame(() => {
-    if (fp !== _actressRenderFingerprint) renderActresses();
+    if (fp === _actressRenderFingerprint) return; // 已被其它渲染处理
+    renderActresses();
     window.scrollTo(0, _pageScrollPos['page-actresses'] || 0);
   });
 }
@@ -735,8 +882,12 @@ function loadWorkList(resetSearch = false) {
   showPage('page-works', false);
   updateWorkStatus();
   const fp = workFingerprint();
+  // 列表未变化：跳过重渲染（滚动位置已由 showPage 恢复）
+  if (fp === _workRenderFingerprint) return;
+  // 列表有变化：推迟一帧再渲染，让页面切换帧只绘制轻量框架
   requestAnimationFrame(() => {
-    if (fp !== _workRenderFingerprint) renderWorks();
+    if (fp === _workRenderFingerprint) return; // 已被其它渲染处理
+    renderWorks();
     window.scrollTo(0, _pageScrollPos['page-works'] || 0);
   });
 }
@@ -745,45 +896,55 @@ function loadWorkList(resetSearch = false) {
 let _actressRenderToken = 0;
 let _workRenderToken = 0;
 
-function renderActresses() {
-  const query = els.searchInputActress.value.trim().toLowerCase();
-  let actresses = DB.getActresses();
+// 女优名称匹配（列表展示与批量全选共用）
+function actressNameMatches(actress, query) {
+  if (!query) return true;
+  const displayName = (DB.applyNameMapping(actress.name) || '').toLowerCase();
+  return (!!actress.name && actress.name.toLowerCase().includes(query)) ||
+         (!!actress.alias && actress.alias.toLowerCase().includes(query)) ||
+         displayName.includes(query);
+}
 
-  if (query) {
-    // 匹配作品番号/标题 → 找出这些作品关联的女优（如搜 IPX-536 或 ipx536 返回桃乃木香奈）
-    const normalizedQuery = (normalizeVideoCode(query) || query).toLowerCase();
-    const videoMatchedActressNames = new Set();
-    DB.getVideos().forEach(v => {
-      const code = (v.code || '').toLowerCase();
-      const title = (v.title || '').toLowerCase();
-      if (code.includes(query) || code.includes(normalizedQuery) || title.includes(query)) {
-        (v.actresses || '').split(',').forEach(n => {
-          const t = n.trim();
-          if (t) videoMatchedActressNames.add(t.toLowerCase());
-        });
-      }
-    });
+// 女优搜索过滤：名称命中，或出现在番号/标题命中的作品里
+// （renderActresses 与 selectAllBatch 共用，保证「全选」范围与列表展示一致）
+function filterActressesByQuery(actresses, query) {
+  if (!query) return actresses;
+  // 匹配作品番号/标题 → 找出这些作品关联的女优（如搜 IPX-536 或 ipx536 返回桃乃木香奈）
+  const normalizedQuery = (normalizeVideoCode(query) || query).toLowerCase();
+  const videoMatchedActressNames = new Set();
+  DB.getVideos().forEach(v => {
+    const code = (v.code || '').toLowerCase();
+    const title = (v.title || '').toLowerCase();
+    if (code.includes(query) || code.includes(normalizedQuery) || title.includes(query)) {
+      (v.actresses || '').split(',').forEach(n => {
+        const t = n.trim();
+        if (t) videoMatchedActressNames.add(t.toLowerCase());
+      });
+    }
+  });
 
-    actresses = actresses.filter(a => {
-      const displayName = DB.applyNameMapping(a.name).toLowerCase();
-      const nameMatch = (a.name && a.name.toLowerCase().includes(query)) ||
-             (a.alias && a.alias.toLowerCase().includes(query)) ||
-             displayName.includes(query);
-      if (nameMatch) return true;
-      // 该女优是否出现在番号匹配的作品中（用全部名称变体匹配）
-      return DB.getActressAllNames(a).some(n => videoMatchedActressNames.has(n.toLowerCase()));
-    });
+  if (videoMatchedActressNames.size === 0) {
+    return actresses.filter(a => actressNameMatches(a, query));
   }
+  return actresses.filter(a => {
+    if (actressNameMatches(a, query)) return true;
+    // 该女优是否出现在番号匹配的作品中（用全部名称变体匹配）
+    return getActressAllNamesCached(a).some(n => videoMatchedActressNames.has(n.toLowerCase()));
+  });
+}
+
+function renderActresses() {
+  // 进入即失效上一轮分批渲染：即使本次渲染为空结果，旧批次也不会再向网格追加卡片
+  const token = ++_actressRenderToken;
+  const query = els.searchInputActress.value.trim().toLowerCase();
+  const actresses = filterActressesByQuery(DB.getActresses(), query);
 
   // 排序
   if (actressSortMode === 'works-desc') {
     actresses.sort((a, b) => (actressWorksCountMap[b.id] || 0) - (actressWorksCountMap[a.id] || 0));
   } else if (actressSortMode === 'time-desc') {
-    actresses.sort((a, b) => {
-      const ta = new Date(b.updatedAt || b.createdAt || 0).getTime();
-      const tb = new Date(a.updatedAt || a.createdAt || 0).getTime();
-      return ta - tb;
-    });
+    actresses.sort((a, b) =>
+      toTimestamp(b.updatedAt || b.createdAt) - toTimestamp(a.updatedAt || a.createdAt));
   } else {
     // name-desc: 按显示名降序（Z→A）
     actresses.sort((a, b) => (DB.applyNameMapping(b.name) || '').localeCompare(DB.applyNameMapping(a.name) || '', 'ja'));
@@ -798,7 +959,6 @@ function renderActresses() {
   }
 
   // 分批渲染：首批 30 条立即渲染，剩余分批加载（异步不阻塞主线程）
-  const token = ++_actressRenderToken;
   const BATCH_FIRST = 30;
   const BATCH_SIZE = 50;
 
@@ -894,26 +1054,32 @@ function updateActressStatus() {
 }
 
 // ==================== 作品列表 ====================
+// 作品搜索过滤（renderWorks 与 selectAllBatch 共用）
+function filterWorksByQuery(videos, query) {
+  if (!query) return videos;
+  const normalizedQuery = (normalizeVideoCode(query) || query).toLowerCase();
+  return videos.filter(v => {
+    const code = (v.code || '').toLowerCase();
+    const title = (v.title || '').toLowerCase();
+    const actresses = (v.actresses || '').toLowerCase();
+    const studio = (v.studio || '').toLowerCase();
+    return code.includes(query) ||
+           (normalizedQuery !== query && code.includes(normalizedQuery)) ||
+           title.includes(query) ||
+           actresses.includes(query) ||
+           studio.includes(query);
+  });
+}
+
 function renderWorks() {
+  // 进入即失效上一轮分批渲染（同 renderActresses）
+  const token = ++_workRenderToken;
   const query = els.searchInputWork.value.trim().toLowerCase();
-  let videos = DB.getVideos();
+  const videos = filterWorksByQuery(DB.getVideos(), query);
 
-  if (query) {
-    const normalizedQuery = (normalizeVideoCode(query) || query).toLowerCase();
-    videos = videos.filter(v => {
-      const code = (v.code || '').toLowerCase();
-      const title = (v.title || '').toLowerCase();
-      const actresses = (v.actresses || '').toLowerCase();
-      const studio = (v.studio || '').toLowerCase();
-      return code.includes(query) ||
-             (normalizedQuery !== query && code.includes(normalizedQuery)) ||
-             title.includes(query) ||
-             actresses.includes(query) ||
-             studio.includes(query);
-    });
-  }
-
-  videos.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  // 与导出顺序保持一致：优先添加时间，缺失时回退修改时间
+  videos.sort((a, b) =>
+    toTimestamp(b.createdAt || b.updatedAt) - toTimestamp(a.createdAt || a.updatedAt));
 
   els.searchCountWork.textContent = query ? `${videos.length} 个结果` : '';
 
@@ -944,7 +1110,6 @@ function renderWorks() {
   }
 
   // 分批渲染：首批 30 条立即渲染，剩余分批加载（异步不阻塞主线程）
-  const token = ++_workRenderToken;
   const BATCH_FIRST = 30;
   const BATCH_SIZE = 50;
 
@@ -1088,15 +1253,8 @@ function updateBatchInfo(type) {
 function selectAllBatch(type) {
   if (type === 'actress') {
     const query = els.searchInputActress.value.trim().toLowerCase();
-    let actresses = DB.getActresses();
-    if (query) {
-      actresses = actresses.filter(a => {
-        const displayName = DB.applyNameMapping(a.name).toLowerCase();
-        return (a.name && a.name.toLowerCase().includes(query)) ||
-               (a.alias && a.alias.toLowerCase().includes(query)) ||
-               displayName.includes(query);
-      });
-    }
+    // 与列表展示使用同一套过滤逻辑，保证「全选」= 当前可见项
+    const actresses = filterActressesByQuery(DB.getActresses(), query);
     if (selectedActresses.size === actresses.length) {
       selectedActresses.clear();
     } else {
@@ -1107,15 +1265,7 @@ function selectAllBatch(type) {
     renderActresses();
   } else if (type === 'work') {
     const query = els.searchInputWork.value.trim().toLowerCase();
-    let videos = DB.getVideos();
-    if (query) {
-      videos = videos.filter(v =>
-        (v.code && v.code.toLowerCase().includes(query)) ||
-        (v.title && v.title.toLowerCase().includes(query)) ||
-        (v.actresses && v.actresses.toLowerCase().includes(query)) ||
-        (v.studio && v.studio.toLowerCase().includes(query))
-      );
-    }
+    const videos = filterWorksByQuery(DB.getVideos(), query);
     if (selectedWorks.size === videos.length) {
       selectedWorks.clear();
     } else {
@@ -1139,7 +1289,7 @@ function deleteBatch(type) {
       confirmText: '删除'
     }).then(ok => {
       if (!ok) return;
-      selectedActresses.forEach(id => DB.deleteActress(id));
+      DB.deleteActresses([...selectedActresses]);
       selectedActresses.clear();
       exitBatchMode('actress');
       updateActressWorksCount();
@@ -1159,7 +1309,7 @@ function deleteBatch(type) {
       confirmText: '删除'
     }).then(ok => {
       if (!ok) return;
-      selectedWorks.forEach(id => DB.deleteVideo(id));
+      DB.deleteVideos([...selectedWorks]);
       selectedWorks.clear();
       exitBatchMode('work');
       updateActressWorksCount();
@@ -1190,16 +1340,28 @@ function refreshData(type) {
   }, 600);
 }
 
+// 取女优全部名称变体（优先读缓存；缓存随 updateActressWorksCount 重建）
+function getActressAllNamesCached(actress) {
+  if (!actress) return [];
+  const cached = actressAllNamesMap[actress.id];
+  if (cached) return cached;
+  const names = DB.getActressAllNames(actress);
+  actressAllNamesMap[actress.id] = names;
+  return names;
+}
+
 function updateActressWorksCount() {
   const actresses = DB.getActresses();
   const videos = DB.getVideos();
   actressWorksCountMap = {};
+  actressAllNamesMap = {};
 
   // 建立女优所有名称变体 -> id 映射（小写），包含原名、别名、映射名
   const nameToId = {};
   actresses.forEach(actress => {
     actressWorksCountMap[actress.id] = 0;
     const allNames = DB.getActressAllNames(actress);
+    actressAllNamesMap[actress.id] = allNames;
     allNames.forEach(n => {
       nameToId[n.toLowerCase()] = actress.id;
     });
@@ -1248,7 +1410,7 @@ function openActressDetail(actressId) {
   els.detailMeta.textContent = metaParts.join(' · ') || '暂无详细信息';
 
   // 获取该女优的所有名称变体（原名、别名、映射名），用于匹配作品
-  const allNames = DB.getActressAllNames(actress).map(n => n.toLowerCase());
+  const allNames = getActressAllNamesCached(actress).map(n => n.toLowerCase());
   const works = DB.getVideos().filter(v => {
     if (!v.actresses) return false;
     const videoNames = v.actresses.split(',').map(n => n.trim().toLowerCase());
@@ -1259,7 +1421,8 @@ function openActressDetail(actressId) {
   if (works.length === 0) {
     els.worksList.innerHTML = '<div class="empty-state" style="padding: 40px 0;"><p>暂无作品</p></div>';
   } else {
-    works.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    works.sort((a, b) =>
+      toTimestamp(b.createdAt || b.updatedAt) - toTimestamp(a.createdAt || a.updatedAt));
     works.forEach(video => els.worksList.appendChild(createWorkCard(video)));
   }
 
@@ -1271,7 +1434,7 @@ function updateDetailCheckinCount() {
   if (!detailActressId) return;
   const actress = DB.getActress(detailActressId);
   if (!actress) return;
-  const allNames = DB.getActressAllNames(actress).map(n => n.toLowerCase());
+  const allNames = getActressAllNamesCached(actress).map(n => n.toLowerCase());
   const checkins = DB.getCheckins();
   let count = 0;
   checkins.forEach(c => {
@@ -1481,6 +1644,9 @@ async function handleVideoSubmit(e) {
     return;
   }
 
+  // 规整女优名：去空白、去重（避免 "A,A" 这类脏数据入库）
+  data.actresses = normalizeNameList(data.actresses);
+
   // 自动关联/创建女优
   if (data.actresses) {
     const names = data.actresses.split(',').map(n => n.trim()).filter(Boolean);
@@ -1525,7 +1691,7 @@ async function handleActressSubmit(e) {
   const data = {
     name: document.getElementById('actress-name').value.trim(),
     birthday: parseBirthdayInput(document.getElementById('actress-birthday').value),
-    height: document.getElementById('actress-height').value,
+    height: document.getElementById('actress-height').value.trim(),
     note: document.getElementById('actress-note').value.trim(),
     avatar
   };
@@ -1730,9 +1896,20 @@ function showVideoDetail(videoId) {
       ${video.description ? `<div class="detail-section-block"><div class="detail-section-title">简介</div><div class="detail-description">${escapeHtml(video.description).replace(/\n/g, '<br>')}</div></div>` : ''}
       ${video.note ? `<div class="detail-section-block"><div class="detail-section-title">备注</div><div class="detail-note">${escapeHtml(video.note).replace(/\n/g, '<br>')}</div></div>` : ''}
       ${renderPlayButton(video)}
-      <button class="btn-primary" style="margin-top:10px;width:100%;" onclick="openVideoModal('${video.id}')">编辑</button>
+      <button class="btn-primary detail-edit-btn" data-video-id="${escapeHtml(video.id)}" style="margin-top:10px;width:100%;">编辑</button>
     </div>
   `;
+
+  // 统一用事件绑定（而非把数据拼进 onclick 的 JS 字符串），避免转义边界问题
+  const playBtn = els.detailBody.querySelector('.detail-play-btn');
+  if (playBtn) {
+    playBtn.addEventListener('click', () => showPlaySourcePopup(playBtn.dataset.playCode));
+  }
+  const editBtn = els.detailBody.querySelector('.detail-edit-btn');
+  if (editBtn) {
+    editBtn.addEventListener('click', () => openVideoModal(editBtn.dataset.videoId));
+  }
+
   openModal(els.detailModal);
 }
 
@@ -1740,7 +1917,7 @@ function showVideoDetail(videoId) {
 function renderPlayButton(video) {
   const code = (video.code || '').trim().toLowerCase();
   if (!code) return '';
-  return `<button class="btn-secondary detail-play-btn" onclick="showPlaySourcePopup('${escapeHtml(code)}')">▶ 在线播放</button>`;
+  return `<button class="btn-secondary detail-play-btn" data-play-code="${escapeHtml(code)}">▶ 在线播放</button>`;
 }
 
 // ==================== 在线播放源选择 ====================
@@ -1814,7 +1991,7 @@ function renderRandomPreview(item, isRolling) {
         ${(item.cover || item.coverUrl) ? `<img ${imageAttr(item.cover || item.coverUrl)} alt="${escapeHtml(item.code)}">` : '<div style="font-size:48px">🎬</div>'}
         <h3>${escapeHtml(item.code)}</h3>
         <p>${escapeHtml(item.title || '无标题')}</p>
-        ${!isRolling ? `<button class="btn-secondary" style="margin-top:12px;" onclick="showDetailFromRandom('video','${item.id}')">查看详情</button>` : ''}
+        ${!isRolling ? `<button class="btn-secondary random-detail-btn" data-random-type="video" data-random-id="${escapeHtml(item.id)}" style="margin-top:12px;">查看详情</button>` : ''}
       </div>
     `;
   } else {
@@ -1825,9 +2002,15 @@ function renderRandomPreview(item, isRolling) {
         ${item.avatar ? `<img ${imageAttr(item.avatar)} alt="${escapeHtml(displayName)}">` : '<div style="color:var(--primary);font-size:48px;display:flex;align-items:center;justify-content:center;"><svg width="56" height="56" viewBox="0 0 24 24" fill="currentColor"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg></div>'}
         <h3>${escapeHtml(displayName)}</h3>
         <p>${worksCount} 部作品</p>
-        ${!isRolling ? `<button class="btn-secondary" style="margin-top:12px;" onclick="showDetailFromRandom('actress','${item.id}')">查看详情</button>` : ''}
+        ${!isRolling ? `<button class="btn-secondary random-detail-btn" data-random-type="actress" data-random-id="${escapeHtml(item.id)}" style="margin-top:12px;">查看详情</button>` : ''}
       </div>
     `;
+  }
+
+  const detailBtn = els.randomResult.querySelector('.random-detail-btn');
+  if (detailBtn) {
+    detailBtn.addEventListener('click', () =>
+      showDetailFromRandom(detailBtn.dataset.randomType, detailBtn.dataset.randomId));
   }
 }
 
@@ -2014,20 +2197,6 @@ function parseApiItemToVideoData(item, fallbackCode) {
     note: '',
     cover: ''
   };
-}
-
-// 规范化番号：字母和数字之间自动补全「-」，如 ipx536 -> IPX-536
-function normalizeVideoCode(code) {
-  if (!code) return code;
-  code = code.trim().toUpperCase();
-  // 已包含「-」则不再处理
-  if (code.includes('-')) return code;
-  // 匹配 字母+数字 格式（至少 1 个字母和 1 个数字）
-  const match = code.match(/^([A-Z]+)(\d+)$/);
-  if (match) {
-    return `${match[1]}-${match[2]}`;
-  }
-  return code;
 }
 
 // 单个作品表单：点击「API获取」按钮后调 API 填充表单
@@ -2234,24 +2403,6 @@ function toggleMonthPicker() {
   });
 }
 
-function calcCheckinStreak(byDate) {
-  const today = new Date();
-  let streak = 0;
-  let cursor = new Date(today);
-  while (true) {
-    const ds = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, '0')}-${String(cursor.getDate()).padStart(2, '0')}`;
-    if (byDate[ds]) {
-      streak++;
-      cursor.setDate(cursor.getDate() - 1);
-    } else if (streak === 0 && ds === `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`) {
-      cursor.setDate(cursor.getDate() - 1);
-    } else {
-      break;
-    }
-  }
-  return streak;
-}
-
 function openCheckinModal(dateStr) {
   checkinCurrentDate = dateStr;
   checkinPendingEntries = [];
@@ -2260,8 +2411,6 @@ function openCheckinModal(dateStr) {
   els.checkinSearchInput.value = '';
   els.checkinSuggestList.innerHTML = '';
   els.checkinNoMatch.style.display = 'none';
-  els.checkinCustomRow.style.display = 'none';
-  els.checkinSaveLocal.checked = false;
   els.checkinLinkedHint.textContent = '';
   renderPendingList();
 
@@ -2282,7 +2431,8 @@ function buildCheckinEntryList() {
       code,
       actress: actresses,
       name: code + (actresses ? ` (${actresses})` : ''),
-      search: (code + ' ' + (v.title || '') + ' ' + actresses).toLowerCase()
+      search: (code + ' ' + (v.title || '') + ' ' + actresses).toLowerCase(),
+      createdAt: v.createdAt || ''
     });
   });
   DB.getActresses().forEach(a => {
@@ -2293,7 +2443,8 @@ function buildCheckinEntryList() {
       code: '',
       actress: display,
       name: display,
-      search: (a.name + ' ' + (a.alias || '') + ' ' + display).toLowerCase()
+      search: (a.name + ' ' + (a.alias || '') + ' ' + display).toLowerCase(),
+      createdAt: a.createdAt || ''
     });
   });
   return list;
@@ -2309,8 +2460,17 @@ function renderCheckinSuggestions() {
   if (query) {
     matched = allEntries.filter(e => e.search.includes(query));
   } else {
-    // 无输入：最近添加的条目
-    matched = allEntries.slice(-12).reverse();
+    // 无输入：最近条目按最近添加的作品倒序排列
+    matched = allEntries
+      .map((e, i) => ({ e, i }))
+      .sort((x, y) => {
+        const xt = x.e.createdAt || '';
+        const yt = y.e.createdAt || '';
+        if (xt !== yt) return xt > yt ? -1 : 1;
+        if (x.e.type !== y.e.type) return x.e.type === 'work' ? -1 : 1;
+        return x.i - y.i;
+      })
+      .map(p => p.e);
   }
   matched = matched.slice(0, 12);
 
@@ -2332,11 +2492,6 @@ function renderCheckinSuggestions() {
   // 无匹配提示
   els.checkinNoMatch.style.display = (query && matched.length === 0) ? 'block' : 'none';
 
-  // 自定义条目区：输入内容不是某个本地条目的精确匹配时显示
-  const raw = els.checkinSearchInput.value.trim();
-  const exactMatch = allEntries.find(e => e.name.toLowerCase() === raw.toLowerCase());
-  els.checkinCustomRow.style.display = (raw && !exactMatch) ? 'flex' : 'none';
-
   renderCheckinLinkedHint();
 }
 
@@ -2352,35 +2507,6 @@ function selectCheckinEntry(entry) {
   els.checkinSearchInput.value = '';
   els.checkinSuggestList.innerHTML = '';
   els.checkinNoMatch.style.display = 'none';
-  els.checkinCustomRow.style.display = 'none';
-  els.checkinLinkedHint.textContent = '';
-  renderPendingList();
-}
-
-// 自定义条目「添加」按钮：将当前输入内容作为自定义条目加入待提交列表
-function addCustomCheckinEntry() {
-  const text = els.checkinSearchInput.value.trim();
-  if (!text) { showToast('请先输入条目内容', 'error'); return; }
-  const parsed = parseCustomEntry(text);
-  const displayName = parsed.code
-    ? (parsed.code + (parsed.actress ? ` (${parsed.actress})` : ''))
-    : (parsed.actress || text);
-  const entry = { type: 'custom', id: '', code: parsed.code, actress: parsed.actress, name: displayName };
-  if (!checkinPendingEntries.some(p => p.type === 'custom' && p.name.toLowerCase() === displayName.toLowerCase())) {
-    // 勾选「保存至本地库」则立即入库（入库是显式动作，不随打卡提交）
-    if (els.checkinSaveLocal.checked) {
-      saveCustomEntryToLocal(text);
-    }
-    checkinPendingEntries.push(entry);
-    showToast(`已勾选自定义条目：${displayName}`, 'info', 1200);
-  } else {
-    showToast('该条目已在勾选列表中', 'info', 1200);
-  }
-  els.checkinSearchInput.value = '';
-  els.checkinSuggestList.innerHTML = '';
-  els.checkinNoMatch.style.display = 'none';
-  els.checkinCustomRow.style.display = 'none';
-  els.checkinSaveLocal.checked = false;
   els.checkinLinkedHint.textContent = '';
   renderPendingList();
 }
@@ -2453,7 +2579,7 @@ function renderCheckinLinkedHint() {
     (a.name || '').toLowerCase() === text.toLowerCase()
   );
   if (actress) {
-    const allNames = DB.getActressAllNames(actress).map(n => n.toLowerCase());
+    const allNames = getActressAllNamesCached(actress).map(n => n.toLowerCase());
     const works = DB.getVideos()
       .filter(v => v.actresses && v.actresses.split(',').map(n => n.trim().toLowerCase()).some(n => allNames.includes(n)))
       .slice(0, 5);
@@ -2471,7 +2597,7 @@ function renderCheckinLinkedHint() {
   hintEl.textContent = '';
 }
 
-// 解析自定义条目文本：'番号 (演员名)' | '番号' | '演员名'
+// 解析搜索文本中的番号/女优名（仅用于本地关联提示，不再创建自定义条目）
 function parseCustomEntry(text) {
   text = text.trim();
   let m = text.match(/^([A-Za-z0-9-]+)\s*[（(](.+)[)）]\s*$/);
@@ -2487,51 +2613,9 @@ function parseCustomEntry(text) {
   return { code: '', actress: text };
 }
 
-// 一键保存自定义条目到本地数据库（演员/作品）
-function saveCustomEntryToLocal(text) {
-  if (!text) { showToast('请先输入条目内容', 'error'); return; }
-  const parsed = parseCustomEntry(text);
-  let saved = 0;
-
-  if (parsed.code) {
-    const existing = DB.getVideos().find(v => (v.code || '').toUpperCase() === parsed.code.toUpperCase());
-    if (existing) {
-      // 番号已存在：补充演员
-      if (parsed.actress) {
-        const names = existing.actresses ? existing.actresses.split(',').map(n => n.trim()).filter(Boolean) : [];
-        parsed.actress.split(',').forEach(n => {
-          if (!names.some(x => x.toLowerCase() === n.toLowerCase())) names.push(n);
-        });
-        DB.updateVideo(existing.id, { actresses: names.join(',') });
-      }
-    } else {
-      DB.addVideo({ code: parsed.code, actresses: parsed.actress });
-      saved++;
-    }
-  }
-  if (parsed.actress) {
-    parsed.actress.split(',').forEach(name => {
-      if (!DB.findActressByName(name)) {
-        DB.addActress({ name });
-        saved++;
-      }
-    });
-  }
-  updateActressWorksCount();
-  refreshCurrentPage();
-  updateHomeStats();
-  showToast(saved > 0 ? `已保存 ${saved} 条到本地库` : '该条目已在本地库中', 'success');
-}
-
+// 一键提交打卡
 function doCheckin() {
   if (!checkinCurrentDate) return;
-  const pending = checkinPendingEntries;
-  const searchText = els.checkinSearchInput.value.trim();
-
-  // 条目不强制：无勾选时若输入框有内容则自动作为自定义条目；否则记录为无条目打卡
-  if (pending.length === 0 && searchText) {
-    addCustomCheckinEntry();
-  }
   const finalPending = checkinPendingEntries;
 
   // 提交二次确认（统一自定义弹窗）
@@ -2583,19 +2667,6 @@ function commitCheckin(finalPending) {
           targetCode: '',
           targetActress: entry.name
         };
-      } else {
-        // 自定义条目：统一展示格式「番号 (演员名)」
-        const parsed = parseCustomEntry(entry.name);
-        const displayName = parsed.code
-          ? (parsed.code + (parsed.actress ? ` (${parsed.actress})` : ''))
-          : (parsed.actress || entry.name);
-        record = {
-          targetType: 'custom',
-          targetId: '',
-          targetName: displayName,
-          targetCode: parsed.code,
-          targetActress: parsed.actress
-        };
       }
       DB.addCheckin({
         date: checkinCurrentDate,
@@ -2628,6 +2699,11 @@ function renderCheckinExisting(dateStr) {
   records.forEach(r => {
     const rec = DB.normalizeCheckinRecord(r);
     const typeLabel = rec.type === 'actress' ? '女优' : rec.type === 'work' ? '作品' : (r.targetType === 'none' || !rec.name) ? '无条目' : '自定义';
+    // 打卡时间：HH:mm（24 小时制，精确到分钟）；旧记录无 createdAt 时不显示
+    const cd = r.createdAt ? new Date(r.createdAt) : null;
+    const timeStr = cd && !isNaN(cd.getTime())
+      ? `${String(cd.getHours()).padStart(2, '0')}:${String(cd.getMinutes()).padStart(2, '0')}`
+      : '';
     const item = document.createElement('div');
     item.className = 'checkin-existing-item';
     item.innerHTML = `
@@ -2636,6 +2712,7 @@ function renderCheckinExisting(dateStr) {
         ${rec.name ? `<span class="checkin-existing-name">${escapeHtml(rec.name)}</span>` : ''}
         ${r.note ? `<span class="checkin-existing-note">${escapeHtml(r.note)}</span>` : ''}
       </div>
+      ${timeStr ? `<span class="checkin-existing-time">${timeStr}</span>` : ''}
       <button class="btn-delete btn-sm" data-id="${r.id}">删除</button>
     `;
     item.querySelector('button').addEventListener('click', () => {
@@ -2681,6 +2758,61 @@ function handleCheckinLongPress(dateStr) {
   });
 }
 // ==================== 统计分析 ====================
+// ==================== 打卡热力图（年度打卡分布） ====================
+// 颜色分级：0=无 1=较少 … 4=最多（按当年打卡最多一天为基准）
+function buildCheckinHeatmap(byDate) {
+  const years = Object.keys(byDate).map(k => parseInt(k.split('-')[0], 10)).filter(n => n > 0);
+  const uniq = [...new Set(years)].sort((a, b) => a - b);
+  if (!uniq.length) return '<div class="stats-empty">暂无打卡数据</div>';
+  return uniq.map(y => buildHeatmapYearBlock(byDate, y)).join('');
+}
+
+function buildHeatmapYearBlock(byDate, year) {
+  const counts = Object.values(byDate);
+  const maxCount = counts.length ? Math.max.apply(null, counts) : 1;
+  const start = new Date(year, 0, 1);
+  const startDow = start.getDay(); // 0=周日
+  const totalDays = (year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)) ? 366 : 365;
+  const cols = Math.ceil((startDow + totalDays) / 7);
+
+  // 顶部月份标签（每列等宽，允许向右溢出）
+  let labels = '';
+  for (let m = 0; m < 12; m++) {
+    const dayNumber = Math.round((new Date(year, m, 1) - start) / 86400000);
+    const col = Math.floor((startDow + dayNumber) / 7);
+    labels += `<span style="grid-column:${col + 1}">${m + 1}月</span>`;
+  }
+
+  // 7 行（周）的格子，按列(周)填充
+  let cells = '';
+  const total = cols * 7;
+  for (let i = 0; i < total; i++) {
+    const day = i - startDow;
+    if (day < 0 || day >= totalDays) {
+      cells += '<span class="heatmap-cell empty"></span>';
+      continue;
+    }
+    const d = new Date(year, 0, 1);
+    d.setDate(d.getDate() + day);
+    const key = `${year}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const count = byDate[key] || 0;
+    const lvl = count === 0 ? 0
+      : (count >= Math.ceil(maxCount * 0.85) ? 4
+      : (count >= Math.ceil(maxCount * 0.55) ? 3
+      : (count >= Math.ceil(maxCount * 0.28) ? 2 : 1)));
+    cells += `<span class="heatmap-cell" data-lvl="${lvl}" data-date="${key}" data-count="${count}" title="${key}${count ? ' · ' + count + ' 次打卡' : ''}"></span>`;
+  }
+
+  return `
+    <div class="heatmap-block">
+      <div class="heatmap-year">${year}年</div>
+      <div class="heatmap-wrap" style="--heat-cols:${cols}">
+        <div class="heatmap-labels">${labels}</div>
+        <div class="heatmap-grid">${cells}</div>
+      </div>
+    </div>`;
+}
+
 function openStatsPage() {
   showPage('page-stats');
 }
@@ -2694,7 +2826,7 @@ function renderStatsPage() {
   const byMonth = {};
   allCheckins.forEach(c => {
     const date = c.date;
-    byDate[date] = true;
+    byDate[date] = (byDate[date] || 0) + 1;
     const [y, m] = date.split('-');
     const key = `${y}-${m}`;
     byMonth[key] = (byMonth[key] || 0) + 1;
@@ -2757,6 +2889,19 @@ function renderStatsPage() {
     </div>
   </div>`;
 
+  // 打卡热力图
+  html += '<div class="stats-section"><h3 class="stats-section-title">打卡热力图</h3>';
+  html += buildCheckinHeatmap(byDate);
+  html += `<div class="heatmap-legend">
+    <span class="hl-label">少</span>
+    <span class="heatmap-cell hc-lg" data-lvl="0"></span>
+    <span class="heatmap-cell hc-lg" data-lvl="1"></span>
+    <span class="heatmap-cell hc-lg" data-lvl="2"></span>
+    <span class="heatmap-cell hc-lg" data-lvl="3"></span>
+    <span class="heatmap-cell hc-lg" data-lvl="4"></span>
+    <span class="hl-label">多</span>
+  </div></div>`;
+
   // 月度柱状图
   html += '<div class="stats-section"><h3 class="stats-section-title">月度打卡</h3>';
   html += '<div class="stats-monthly-chart">';
@@ -2793,9 +2938,131 @@ function renderStatsPage() {
   html += '</div>';
 
   els.statsPageContent.innerHTML = html;
+
+  // 热力图格子点击：显示该天的打卡日期与次数（触屏友好，title 提示在移动端不生效）
+  const hCells = els.statsPageContent.querySelectorAll('.heatmap-cell[data-date]');
+  for (let i = 0; i < hCells.length; i++) {
+    hCells[i].addEventListener('click', function() {
+      const date = this.dataset.date;
+      const count = this.dataset.count;
+      showToast(date + (count && count !== '0' ? ` · ${count} 次打卡` : ' · 无打卡'), '', 2500);
+    });
+  }
+
+  // 同步刷新打卡搜索结果（保留搜索词，数据变更后保持结果最新）
+  renderCheckinSearch();
 }
 
-// 当前连续打卡天数（与 calcCheckinStreak 相同逻辑，修复跨月BUG）
+// ==================== 打卡记录搜索（统计页） ====================
+// 按番号/女优搜索打卡记录：按条目分组展示打卡次数与具体日期，便于对比
+function renderCheckinSearch() {
+  const query = els.searchInputCheckin.value.trim().toLowerCase();
+  const hasQuery = query.length > 0;
+  els.searchClearCheckin.classList.toggle('show', hasQuery);
+
+  if (!hasQuery) {
+    // 无搜索词：显示常规统计内容
+    els.searchCountCheckin.textContent = '';
+    els.statsSearchResults.style.display = 'none';
+    els.statsSearchResults.innerHTML = '';
+    els.statsPageContent.style.display = '';
+    return;
+  }
+
+  // 搜索时聚焦结果，隐藏常规统计内容
+  els.statsPageContent.style.display = 'none';
+  els.statsSearchResults.style.display = '';
+
+  // 番号匹配忽略大小写与连字符（IPX-536 / ipx536 均可命中）
+  const normCode = s => (s || '').toLowerCase().replace(/[\s\-]/g, '');
+  const qNorm = normCode(query);
+
+  const matched = DB.getCheckins().filter(c => {
+    const rec = DB.normalizeCheckinRecord(c);
+    // 番号匹配（新旧格式记录的 code 均覆盖）
+    if (rec.code && (rec.code.toLowerCase().includes(query) || normCode(rec.code).includes(qNorm))) return true;
+    // 条目名匹配（自定义/旧格式记录）
+    if (rec.name && rec.name.toLowerCase().includes(query)) return true;
+    // 女优匹配：原始名与替换后的显示名都参与（如 Kana Momonogi / 桃乃木香奈）
+    const names = (rec.actress || '').split(',');
+    for (let i = 0; i < names.length; i++) {
+      const t = names[i].trim();
+      if (!t) continue;
+      if (t.toLowerCase().includes(query)) return true;
+      const disp = DB.applyNameMapping(t);
+      if (disp && disp.toLowerCase().includes(query)) return true;
+    }
+    return false;
+  });
+
+  if (matched.length === 0) {
+    els.searchCountCheckin.textContent = '0 条记录';
+    els.statsSearchResults.innerHTML = '<div class="stats-empty">无匹配的打卡记录</div>';
+    return;
+  }
+
+  // 按条目分组（作品按番号、女优按名、自定义按名），统计打卡次数与日期
+  const groups = new Map();
+  matched.forEach(c => {
+    const rec = DB.normalizeCheckinRecord(c);
+    let key, badge, badgeCls, title, sub = '';
+    if (rec.type === 'work') {
+      key = 'w:' + (rec.code || rec.name || 'unknown');
+      badge = '作品';
+      badgeCls = 'work';
+      title = rec.code || rec.name;
+      if (rec.actress) sub = DB.applyNameMappingsToActresses(rec.actress);
+    } else if (rec.type === 'actress') {
+      key = 'a:' + rec.name;
+      badge = '女优';
+      badgeCls = 'actress';
+      title = DB.applyNameMapping(rec.name);
+    } else {
+      key = 'c:' + rec.name;
+      badge = '自定义';
+      badgeCls = 'custom';
+      title = rec.name || '（无条目）';
+    }
+    if (!groups.has(key)) {
+      groups.set(key, { badge, badgeCls, title, sub, count: 0, entries: [], latest: '' });
+    }
+    const g = groups.get(key);
+    g.count++;
+    g.entries.push(c);
+    if ((c.date || '') > g.latest) g.latest = c.date || '';
+  });
+
+  // 组排序：打卡次数多的在前，次数相同时最近打卡的在前
+  const groupList = [...groups.values()].sort((a, b) => {
+    if (b.count !== a.count) return b.count - a.count;
+    return (b.latest || '').localeCompare(a.latest || '');
+  });
+
+  els.searchCountCheckin.textContent = `${matched.length} 条记录 · ${groupList.length} 个条目`;
+
+  let html = '';
+  groupList.forEach(g => {
+    // 组内日期降序（最近的打卡在最前）
+    const entries = [...g.entries].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    html += `<div class="checkin-result-group">
+      <div class="checkin-result-head">
+        <span class="checkin-result-badge ${g.badgeCls}">${g.badge}</span>
+        <span class="checkin-result-title">${escapeHtml(g.title)}</span>
+        ${g.sub ? `<span class="checkin-result-sub">${escapeHtml(g.sub)}</span>` : ''}
+        <span class="checkin-result-count">${g.count} 次</span>
+      </div>
+      <div class="checkin-result-dates">
+        ${entries.map(c => `<div class="checkin-result-date">
+          <span class="checkin-result-day">${escapeHtml(c.date || '未知日期')}</span>
+          ${c.note ? `<span class="checkin-result-note">${escapeHtml(c.note)}</span>` : ''}
+        </div>`).join('')}
+      </div>
+    </div>`;
+  });
+  els.statsSearchResults.innerHTML = html;
+}
+
+// 当前连续打卡天数（按日历逐日回溯，跨月安全）
 function recalcCheckinStreak(byDate) {
   const today = new Date();
   let streak = 0;
@@ -2862,89 +3129,130 @@ async function exportData() {
     const json = JSON.stringify(payload, null, 2);
     const blob = new Blob([json], { type: 'application/json' });
 
-    // 判断是否在原生 Capacitor App 中，且 Filesystem 插件已就绪
-    const isNative = window.Capacitor && typeof window.Capacitor.isNativePlatform === 'function' && window.Capacitor.isNativePlatform();
-    const hasFilesystem = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Filesystem;
-
-    if (isNative && hasFilesystem) {
-      const Filesystem = window.Capacitor.Plugins.Filesystem;
-      const base64 = await blobToBase64(blob);
-
-      // 检查当前存储权限状态（Android 10 及以下 / 已授权所有文件访问时有用）
-      let permissionGranted = false;
-      try {
-        const permResult = await withTimeout(
-          Filesystem.checkPermissions(),
-          3000,
-          '检查存储权限超时'
-        );
-        permissionGranted = permResult && permResult.publicStorage === 'granted';
-      } catch (permErr) {
-        console.warn('检查存储权限失败', permErr);
-      }
-
-      // Android 11+ 优先使用无需权限的应用专属目录
-      const attempts = [
-        { dir: 'EXTERNAL', label: '应用外部存储' },
-        { dir: 'DATA', label: '应用数据目录' },
-        { dir: 'DOCUMENTS', label: 'Documents' }
-      ];
-
-      // 如果已有完整存储权限，再尝试根目录
-      if (permissionGranted) {
-        attempts.push({ dir: 'EXTERNAL_STORAGE', label: '内部存储根目录' });
-      }
-
-      const errors = [];
-      for (const attempt of attempts) {
-        try {
-          await withTimeout(
-            Filesystem.writeFile({
-              path: filename,
-              data: base64,
-              directory: attempt.dir,
-              recursive: true
-            }),
-            10000,
-            `${attempt.label}写入超时`
-          );
-
-          // 获取实际 URI 用于提示
-          let displayPath = `${attempt.label}/${filename}`;
-          try {
-            const uriResult = await withTimeout(
-              Filesystem.getUri({ path: filename, directory: attempt.dir }),
-              3000,
-              '获取文件路径超时'
-            );
-            if (uriResult && uriResult.uri) {
-              displayPath = uriResult.uri;
-            }
-          } catch (uriErr) {
-            console.warn('获取文件 URI 失败', uriErr);
-          }
-
-          showToast(`已导出：${displayPath}`, 'success', 5000);
-          return;
-        } catch (fsErr) {
-          console.warn(`${attempt.label}写入失败`, fsErr);
-          errors.push(`${attempt.label}: ${fsErr.message || fsErr}`);
-        }
-      }
-
-      console.error('Filesystem 全部目录写入失败', errors);
-      showToast('文件目录写入失败，尝试使用系统下载...', 'info', 3000);
-      // 继续执行下方的通用下载回退
-    }
-
-    // 通用回退：触发浏览器/WebView 下载（兼容手机打包工具生成的 WebView APK）
-    await fallbackDownload(blob, filename);
+    await saveBlobToFile(blob, filename);
   } catch (err) {
     console.error('exportData error', err);
     showToast('导出失败: ' + err.message, 'error', 5000);
   } finally {
     hideGlobalLoading();
   }
+}
+
+// 导出作品列表为 TXT：按时间降序排列，每行格式「番号-女优名」
+async function exportWorksTxt() {
+  const videos = DB.getVideos();
+  if (!videos.length) {
+    showToast('暂无可导出的作品', 'info', 3000);
+    return;
+  }
+
+  showGlobalLoading('正在导出作品...');
+
+  try {
+    // 与作品页列表顺序一致：添加时间优先，缺失时回退修改时间（getVideos 返回副本，可直接排序）
+    const sorted = videos.sort((a, b) =>
+      toTimestamp(b.createdAt || b.updatedAt) - toTimestamp(a.createdAt || a.updatedAt));
+
+    const lines = sorted.map(v => {
+      // 仅导出番号与女优：番号不使用标题（API 标题常为一整句描述性文字）
+      const code = (v.code || '').trim();
+      // 女优名：应用名称替换规则后的显示名（多个女优用逗号分隔）
+      const actresses = DB.applyNameMappingsToActresses(v.actresses || '');
+      if (!code && !actresses) return '';
+      return code && actresses ? `${code}-${actresses}` : (code || actresses);
+    }).filter(Boolean);
+
+    // 加 UTF-8 BOM 并使用 CRLF 换行，保证 Windows 记事本等编辑器正确显示中文
+    const blob = new Blob(['\ufeff' + lines.join('\r\n') + '\r\n'], { type: 'text/plain;charset=utf-8' });
+    const dateStr = new Date().toISOString().slice(0, 10);
+    await saveBlobToFile(blob, `avmanager_works_${dateStr}.txt`);
+  } catch (err) {
+    console.error('exportWorksTxt error', err);
+    showToast('导出失败: ' + err.message, 'error', 5000);
+  } finally {
+    hideGlobalLoading();
+  }
+}
+
+// 将 Blob 保存为文件：原生环境优先写入 Filesystem 各目录，均失败或非原生环境回退 WebView 下载
+async function saveBlobToFile(blob, filename) {
+  // 判断是否在原生 Capacitor App 中，且 Filesystem 插件已就绪
+  const isNative = window.Capacitor && typeof window.Capacitor.isNativePlatform === 'function' && window.Capacitor.isNativePlatform();
+  const hasFilesystem = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Filesystem;
+
+  if (isNative && hasFilesystem) {
+    const Filesystem = window.Capacitor.Plugins.Filesystem;
+    const base64 = await blobToBase64(blob);
+
+    // 检查当前存储权限状态（Android 10 及以下 / 已授权所有文件访问时有用）
+    let permissionGranted = false;
+    try {
+      const permResult = await withTimeout(
+        Filesystem.checkPermissions(),
+        3000,
+        '检查存储权限超时'
+      );
+      permissionGranted = permResult && permResult.publicStorage === 'granted';
+    } catch (permErr) {
+      console.warn('检查存储权限失败', permErr);
+    }
+
+    // Android 11+ 优先使用无需权限的应用专属目录
+    const attempts = [
+      { dir: 'EXTERNAL', label: '应用外部存储' },
+      { dir: 'DATA', label: '应用数据目录' },
+      { dir: 'DOCUMENTS', label: 'Documents' }
+    ];
+
+    // 如果已有完整存储权限，再尝试根目录
+    if (permissionGranted) {
+      attempts.push({ dir: 'EXTERNAL_STORAGE', label: '内部存储根目录' });
+    }
+
+    const errors = [];
+    for (const attempt of attempts) {
+      try {
+        await withTimeout(
+          Filesystem.writeFile({
+            path: filename,
+            data: base64,
+            directory: attempt.dir,
+            recursive: true
+          }),
+          10000,
+          `${attempt.label}写入超时`
+        );
+
+        // 获取实际 URI 用于提示
+        let displayPath = `${attempt.label}/${filename}`;
+        try {
+          const uriResult = await withTimeout(
+            Filesystem.getUri({ path: filename, directory: attempt.dir }),
+            3000,
+            '获取文件路径超时'
+          );
+          if (uriResult && uriResult.uri) {
+            displayPath = uriResult.uri;
+          }
+        } catch (uriErr) {
+          console.warn('获取文件 URI 失败', uriErr);
+        }
+
+        showToast(`已导出：${displayPath}`, 'success', 5000);
+        return;
+      } catch (fsErr) {
+        console.warn(`${attempt.label}写入失败`, fsErr);
+        errors.push(`${attempt.label}: ${fsErr.message || fsErr}`);
+      }
+    }
+
+    console.error('Filesystem 全部目录写入失败', errors);
+    showToast('文件目录写入失败，尝试使用系统下载...', 'info', 3000);
+    // 继续执行下方的通用下载回退
+  }
+
+  // 通用回退：触发浏览器/WebView 下载（兼容手机打包工具生成的 WebView APK）
+  await fallbackDownload(blob, filename);
 }
 
 // 通用下载回退（在原生 WebView 中通常会调用系统下载管理器）
@@ -2996,11 +3304,10 @@ function blobToBase64(blob) {
   });
 }
 
-async function importData(e, source) {
+async function importData(e) {
   const file = e.target.files[0];
   if (!file) return;
 
-  // 默认为合并模式（保留现有数据），移除可选项
   const fileName = file.name.toLowerCase();
 
   showGlobalLoading('正在导入...');
@@ -3014,7 +3321,8 @@ async function importData(e, source) {
 
     const jsonText = await file.text();
     const data = JSON.parse(jsonText);
-    const result = await DB.importData(data, mode);
+    // 仅支持合并模式（保留现有数据）
+    const result = await DB.importData(data, 'merge');
     // 导入站点导航列表
     if (data.sites) {
       saveSites(data.sites);
@@ -3071,6 +3379,9 @@ function renderNameMappingList() {
     `;
     item.querySelector('button').addEventListener('click', () => {
       DB.deleteNameMapping(m.id);
+      // 映射变化会影响女优显示名与名称变体索引，需重建后再刷新列表
+      updateActressWorksCount();
+      refreshCurrentPage();
       renderNameMappingList();
       showToast('已删除替换规则', 'success');
     });
@@ -3103,12 +3414,12 @@ function addNameMappingFromForm() {
   renderNameMappingList();
   els.mappingOriginal.focus();
 
-  // 自动合并替换名相同的女优
+  // 自动合并替换名相同的女优，并重建名称索引（映射变化会影响显示名与匹配结果）
   const mergedCount = DB.mergeActressesByReplacementName();
+  updateActressWorksCount();
+  refreshCurrentPage();
+  updateHomeStats();
   if (mergedCount > 0) {
-    updateActressWorksCount();
-    refreshCurrentPage();
-    updateHomeStats();
     showToast(`替换规则已添加，自动合并 ${mergedCount} 个重复女优`, 'success');
   } else {
     showToast('替换规则已添加', 'success');
@@ -3160,7 +3471,245 @@ function mergeActressesByReplacementNameHandler() {
   });
 }
 
+// ==================== WebDAV 云备份 ====================
+const WEBDAV_CONFIG_KEY = 'jav_webdav_config';
+const WEBDAV_DIR = 'avmanager/'; // 备份统一存放的云端目录
+
+// 返回备份目录的完整 URL（保证以 / 结尾）
+function webdavDir(cfg) {
+  const base = (cfg && cfg.url ? cfg.url : '').replace(/\/+$/, '');
+  return base + '/' + WEBDAV_DIR;
+}
+
+// 尝试在服务器上创建备份目录（MKCOL）；目录已存在时静默忽略
+async function webdavEnsureDir() {
+  const cfg = getWebdavConfig();
+  if (!cfg || !cfg.url) throw new Error('未配置 WebDAV 服务器');
+  try {
+    await fetch(webdavDir(cfg), {
+      method: 'MKCOL',
+      headers: webdavHeaders('MKCOL') || {}
+    });
+  } catch (e) {
+    // 网络等原因导致的 MKCOL 失败先不阻断，回调更明确
+  }
+}
+
+function getWebdavConfig() {
+  try {
+    return JSON.parse(localStorage.getItem(WEBDAV_CONFIG_KEY)) || null;
+  } catch {
+    return null;
+  }
+}
+
+function saveWebdavConfig() {
+  const url = els.webdavUrl.value.trim();
+  const username = els.webdavUser.value.trim();
+  const password = els.webdavPass.value.trim();
+  if (!url) {
+    showToast('请输入服务器地址', 'error');
+    return;
+  }
+  localStorage.setItem(WEBDAV_CONFIG_KEY, JSON.stringify({ url, username, password }));
+  updateWebdavHint();
+  showToast('WebDAV 配置已保存', 'success');
+}
+
+function loadWebdavConfigIntoForm() {
+  const cfg = getWebdavConfig();
+  if (!cfg) {
+    updateWebdavHint();
+    return;
+  }
+  els.webdavUrl.value = cfg.url || '';
+  els.webdavUser.value = cfg.username || '';
+  els.webdavPass.value = cfg.password || '';
+  updateWebdavHint();
+}
+
+function updateWebdavHint() {
+  if (!els.webdavHint) return;
+  const cfg = getWebdavConfig();
+  if (!cfg || !cfg.url) {
+    els.webdavHint.textContent = '未配置。请先填写服务器地址、用户名、密码并保存。';
+    els.webdavHint.style.color = 'var(--text-secondary)';
+  } else {
+    els.webdavHint.textContent = `已配置：${cfg.url}`;
+    els.webdavHint.style.color = 'var(--secondary)';
+  }
+}
+
+// WebDAV 请求：构造 Authorization 头
+function webdavHeaders(method, body) {
+  const cfg = getWebdavConfig();
+  if (!cfg) return null;
+  const headers = {};
+  if (method === 'PUT' && body) headers['Content-Type'] = 'application/json';
+  if (cfg.username || cfg.password) {
+    headers['Authorization'] = 'Basic ' + btoa(`${cfg.username}:${cfg.password}`);
+  }
+  return headers;
+}
+
+// 推送一条备份到 WebDAV：返回写入的文件名
+async function webdavPutBackup() {
+  const cfg = getWebdavConfig();
+  if (!cfg || !cfg.url) throw new Error('未配置 WebDAV 服务器');
+
+  const dateStr = new Date().toISOString().slice(0, 10);
+  const filename = `avmanager_${dateStr}.json`;
+
+  const data = await DB.exportData();
+  const sites = getSites();
+  const payload = { ...data, sites };
+  const json = JSON.stringify(payload, null, 2);
+
+  await webdavEnsureDir();
+
+  const url = webdavDir(cfg) + filename;
+  const response = await fetch(url, {
+    method: 'PUT',
+    headers: webdavHeaders('PUT', json),
+    body: json
+  });
+  if (!response.ok) {
+    throw new Error(`上传失败（HTTP ${response.status}）`);
+  }
+  return filename;
+}
+
+// 测试 WebDAV 连接：校验服务器可访问、凭据正确，并确保备份目录可用
+async function testWebdavConnection() {
+  const cfg = getWebdavConfig();
+  if (!cfg || !cfg.url) {
+    showToast('请先填写并保存 WebDAV 配置', 'error');
+    return;
+  }
+  showGlobalLoading('正在测试 WebDAV 连接...');
+  try {
+    // 用 PROPFIND 探测服务器与凭据
+    const probeUrl = (cfg.url.replace(/\/+$/, '') + '/');
+    const res = await withTimeout(
+      fetch(probeUrl, { method: 'PROPFIND', headers: Object.assign(webdavHeaders('PROPFIND') || {}, { Depth: '1' }) }),
+      15000, '连接超时'
+    );
+    if (res.status === 401 || res.status === 403) {
+      showToast('连接失败：账号或密码错误（HTTP ' + res.status + '）', 'error', 4000);
+      return;
+    }
+    if (!res.ok && !(res.status >= 200 && res.status < 300)) {
+      showToast('连接失败：服务器返回 HTTP ' + res.status, 'error', 4000);
+      return;
+    }
+    // 尝试确保备份目录存在
+    await webdavEnsureDir();
+    updateWebdavHint();
+    showToast('连接成功，备份目录 avmanager/ 已就绪', 'success', 3500);
+  } catch (err) {
+    console.error('webdav test error', err);
+    showToast('连接失败：' + (err.message || '无法访问服务器'), 'error', 5000);
+  } finally {
+    hideGlobalLoading();
+  }
+}
+
+// 上传备份到 WebDAV
+async function uploadBackupToWebdav() {
+  showGlobalLoading('正在上传到 WebDAV...');
+  try {
+    const filename = await withTimeout(webdavPutBackup(), 30000, '上传超时');
+    showToast(`已上传备份：${WEBDAV_DIR}${filename}`, 'success', 4000);
+  } catch (err) {
+    console.error('webdav upload error', err);
+    const msg = err.message || '未知错误';
+    showToast('上传失败: ' + msg, 'error', 5000);
+  } finally {
+    hideGlobalLoading();
+  }
+}
+
+// 从 WebDAV 下载并恢复（合并模式）
+async function restoreFromWebdav() {
+  const cfg = getWebdavConfig();
+  if (!cfg || !cfg.url) {
+    showToast('未配置 WebDAV 服务器', 'error');
+    return;
+  }
+  await showConfirmDialog({
+    title: '从云端恢复',
+    message: '将从 WebDAV 下载备份并以合并方式恢复（保留现有数据）。继续？',
+    confirmText: '恢复'
+  }).then(async ok => {
+    if (!ok) return;
+    showGlobalLoading('正在从 WebDAV 下载...');
+    try {
+      // 先列出服务器上该目录下的 avmanager 备份文件
+      const files = await withTimeout(webdavListBackups(), 20000, '列目录超时');
+      if (!files.length) {
+        showToast('服务器上未找到备份文件', 'error');
+        return;
+      }
+      const target = files[0];
+      const res = await withTimeout(fetch(target.url, { method: 'GET', headers: webdavHeaders('GET') }), 30000, '下载超时');
+      if (!res.ok) throw new Error(`下载失败（HTTP ${res.status}）`);
+      const data = await res.json();
+      const result = await DB.importData(data, 'merge');
+      if (data.sites) saveSites(data.sites);
+      updateActressWorksCount();
+      refreshCurrentPage();
+      updateHomeStats();
+      const avatarCount = data.actresses ? data.actresses.filter(a => a.avatar).length : 0;
+      const coverCount = data.videos ? data.videos.filter(v => v.cover).length : 0;
+      showToast(`已从 ${target.name} 恢复：${result.videoCount} 部作品, ${result.actressCount} 位女优${avatarCount ? `, ${avatarCount} 个头像` : ''}${coverCount ? `, ${coverCount} 个封面` : ''}`, 'success', 5000);
+    } catch (err) {
+      console.error('webdav restore error', err);
+      showToast('恢复失败: ' + (err.message || '未知错误'), 'error', 5000);
+    } finally {
+      hideGlobalLoading();
+    }
+  });
+}
+
+// 通过 PROPFIND 列出 WebDAV 备份目录下的 avmanager 备份文件（按修改时间降序）
+async function webdavListBackups() {
+  const cfg = getWebdavConfig();
+  const url = webdavDir(cfg);
+  // 发起 PROPFIND 深度为 1，解析返回 XML
+  const res = await fetch(url, {
+    method: 'PROPFIND',
+    headers: Object.assign(webdavHeaders('PROPFIND') || {}, { Depth: '1' })
+  });
+  let xmlText = '';
+  try { xmlText = await res.text(); } catch { xmlText = ''; }
+  // 即使非 XML(如 207)，尝试解析
+  const files = [];
+  if (xmlText) {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(xmlText, 'application/xml');
+    const responses = doc.getElementsByTagName('response');
+    for (let i = 0; i < responses.length; i++) {
+      const resp = responses[i];
+      const hrefEl = resp.getElementsByTagName('href')[0];
+      if (!hrefEl) continue;
+      let href = (hrefEl.textContent || '').trim();
+      const lastEl = resp.getElementsByTagName('getlastmodified')[0];
+      const last = lastEl ? (lastEl.textContent || '').trim() : '';
+      const base = decodeURIComponent(href.split('/').pop() || '');
+      if (base.indexOf('avmanager_') === 0 && base.endsWith('.json') && last) {
+        const abs = new URL(href, cfg.url).href;
+        files.push({ name: base, last, url: abs });
+      }
+    }
+  }
+  // 按最后修改时间降序
+  files.sort((a, b) => new Date(b.last) - new Date(a.last));
+  return files;
+}
+
 // ==================== Toast 提示 ====================
+let _toastTimer = null;
+
 function showToast(message, type = '', duration = 2500) {
   let toast = document.getElementById('toast');
   if (!toast) {
@@ -3170,13 +3719,20 @@ function showToast(message, type = '', duration = 2500) {
     document.body.appendChild(toast);
   }
 
+  // 取消上一条提示的隐藏定时器，避免连续提示时后一条被提前关闭
+  if (_toastTimer) {
+    clearTimeout(_toastTimer);
+    _toastTimer = null;
+  }
+
   toast.textContent = message;
   toast.className = `toast ${type}`;
 
   void toast.offsetWidth;
   toast.classList.add('show');
 
-  setTimeout(() => {
+  _toastTimer = setTimeout(() => {
+    _toastTimer = null;
     toast.classList.remove('show');
   }, duration);
 }
@@ -3299,91 +3855,80 @@ function closeCoverPreview() {
 }
 
 // ==================== 工具函数 ====================
-function escapeHtml(str) {
-  if (!str) return '';
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
-}
-
-// 解析生日输入文本，支持多种格式：
-// "1992年11月30日" / "1992-11-30" / "1992/11/30" / "1992.11.30" / "19921130" / "1992 11 30"
-// 返回 "YYYY-MM-DD" 格式，无法解析时返回原始输入
-function parseBirthdayInput(input) {
-  if (!input || !input.trim()) return '';
-  const text = input.trim();
-
-  // 匹配 "1992年11月30日" 格式
-  let m = text.match(/(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日?/);
-  if (m) {
-    return formatBirthdayStr(m[1], m[2], m[3]);
-  }
-
-  // 匹配 "1992-11-30" / "1992/11/30" / "1992.11.30" / "1992 11 30"
-  m = text.match(/(\d{4})[\-\/\.\s]+(\d{1,2})[\-\/\.\s]+(\d{1,2})/);
-  if (m) {
-    return formatBirthdayStr(m[1], m[2], m[3]);
-  }
-
-  // 匹配 "19921130"（8位纯数字）
-  m = text.match(/^(\d{4})(\d{2})(\d{2})$/);
-  if (m) {
-    return formatBirthdayStr(m[1], m[2], m[3]);
-  }
-
-  // 匹配 "1992年11月"（无日）
-  m = text.match(/(\d{4})\s*年\s*(\d{1,2})\s*月/);
-  if (m) {
-    return formatBirthdayStr(m[1], m[2], '01');
-  }
-
-  // 匹配 "1992-11"（无日）
-  m = text.match(/^(\d{4})[\-\/\.](\d{1,2})$/);
-  if (m) {
-    return formatBirthdayStr(m[1], m[2], '01');
-  }
-
-  // 无法解析，返回原始输入
-  return text;
-}
-
-// 格式化为 YYYY-MM-DD，校验日期有效性
-function formatBirthdayStr(year, month, day) {
-  const y = parseInt(year, 10);
-  const mo = parseInt(month, 10);
-  const d = parseInt(day, 10);
-  if (y < 1900 || y > 2100 || mo < 1 || mo > 12 || d < 1 || d > 31) {
-    return `${year}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-  }
-  const date = new Date(y, mo - 1, d);
-  if (date.getFullYear() !== y || date.getMonth() !== mo - 1 || date.getDate() !== d) {
-    return `${year}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-  }
-  return `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-}
-
-// 根据生日计算年龄，返回整数岁数；无法解析时返回 null
-function calcAge(birthday) {
-  if (!birthday) return null;
-  const birth = new Date(birthday);
-  if (isNaN(birth.getTime())) return null;
-  const now = new Date();
-  let age = now.getFullYear() - birth.getFullYear();
-  const mDiff = now.getMonth() - birth.getMonth();
-  if (mDiff < 0 || (mDiff === 0 && now.getDate() < birth.getDate())) {
-    age--;
-  }
-  return age >= 0 ? age : null;
-}
+// escapeHtml / normalizeVideoCode / parseBirthdayInput / calcAge 等公共工具
+// 已统一收敛到 js/utils.js，避免在多个文件中重复定义。
 
 // ==================== 站点导航 ====================
 const SITES_STORAGE_KEY = 'site_nav_list';
 let sitesEditMode = -1; // -1 = adding, index = editing
 
 document.getElementById('sitesAddBtn').addEventListener('click', () => openSitesForm(-1, '', ''));
+
+function setupVideoActressAutocomplete() {
+  const input = els.videoActressesInput;
+  const list = els.videoActressSuggestList;
+  if (!input || !list) return;
+
+  const getTokenInfo = () => {
+    const value = input.value;
+    const cursor = input.selectionStart ?? value.length;
+    const before = value.slice(0, cursor);
+    const after = value.slice(cursor);
+    const left = before.lastIndexOf(',') + 1;
+    const rightRel = after.indexOf(',');
+    const right = rightRel === -1 ? value.length : cursor + rightRel;
+    const token = value.slice(left, right).trim();
+    return { value, cursor, left, right, token };
+  };
+
+  const render = () => {
+    const { token } = getTokenInfo();
+    const actresses = DB.getActresses();
+    const q = token.toLowerCase();
+    const matched = (q ? actresses.filter(a => {
+      const display = DB.applyNameMapping(a.name);
+      return [a.name, a.alias || '', display].some(t => t && t.toLowerCase().includes(q));
+    }) : actresses.slice(-12)).slice(0, 12);
+
+    list.innerHTML = '';
+    if (matched.length === 0) {
+      list.style.display = 'none';
+      return;
+    }
+
+    matched.forEach(a => {
+      const display = DB.applyNameMapping(a.name);
+      const item = document.createElement('div');
+      item.className = 'video-actress-suggest-item';
+      item.innerHTML = `<span class="video-actress-suggest-keyword">${escapeHtml(display)}</span>`;
+      item.addEventListener('mousedown', e => {
+        e.preventDefault();
+        const { value, left, right } = getTokenInfo();
+        const prefix = value.slice(0, left).replace(/\s*,?\s*$/, '');
+        const suffix = value.slice(right).replace(/^\s*,?\s*/, '');
+        const insert = display;
+        const parts = [];
+        if (prefix) parts.push(prefix);
+        parts.push(insert);
+        if (suffix) parts.push(suffix);
+        input.value = parts.join(', ').replace(/,\s*,/g, ', ');
+        list.style.display = 'none';
+        input.focus();
+      });
+      list.appendChild(item);
+    });
+    list.style.display = 'block';
+  };
+
+  input.addEventListener('input', render);
+  input.addEventListener('focus', render);
+  input.addEventListener('blur', () => {
+    setTimeout(() => { list.style.display = 'none'; }, 150);
+  });
+  document.addEventListener('click', e => {
+    if (!list.contains(e.target) && e.target !== input) list.style.display = 'none';
+  });
+}
 
 function getSites() {
   try {
